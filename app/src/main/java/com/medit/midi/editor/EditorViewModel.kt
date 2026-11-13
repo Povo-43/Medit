@@ -866,6 +866,25 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _prefs.value = _prefs.value.copy(showSustainLane = on)
     }
 
+    /** Shows/hides the velocity graph overlaid on the piano roll. */
+    fun toggleVelocityEditor() {
+        _prefs.value = _prefs.value.copy(velocityEditor = !_prefs.value.velocityEditor)
+    }
+
+    /**
+     * Turns the touch selection tool on/off. While on, drags sweep a marquee
+     * and taps add to (or remove from) the current selection.
+     */
+    fun toggleMultiSelectMode() {
+        _prefs.value = _prefs.value.copy(multiSelectMode = !_prefs.value.multiSelectMode)
+    }
+
+    fun setMultiSelectMode(on: Boolean) {
+        if (_prefs.value.multiSelectMode != on) {
+            _prefs.value = _prefs.value.copy(multiSelectMode = on)
+        }
+    }
+
     fun toggleFingerEditing() {
         _prefs.value = _prefs.value.copy(fingerEditing = !_prefs.value.fingerEditing)
     }

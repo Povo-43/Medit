@@ -41,6 +41,8 @@ import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.HighlightAlt
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
@@ -1529,6 +1531,24 @@ private fun ContextDock(
         )
         add(
             DockAction(
+                id = "velocityEditor",
+                icon = Icons.Rounded.BarChart,
+                label = "ベロシティ編集",
+                active = ui.prefs.velocityEditor,
+                onClick = vm::toggleVelocityEditor,
+            )
+        )
+        add(
+            DockAction(
+                id = "multiSelect",
+                icon = Icons.Rounded.HighlightAlt,
+                label = if (ui.prefs.multiSelectMode) "複数選択 ON" else "複数選択",
+                active = ui.prefs.multiSelectMode,
+                onClick = vm::toggleMultiSelectMode,
+            )
+        )
+        add(
+            DockAction(
                 id = "quantizeAll",
                 icon = Icons.Rounded.AutoFixHigh,
                 label = "全クオンタイズ",
@@ -1576,10 +1596,28 @@ private fun ContextDock(
                 )
                 add(
                     DockAction(
+                        id = "velocityEditor",
+                        icon = Icons.Rounded.BarChart,
+                        label = "ベロシティ編集",
+                        active = ui.prefs.velocityEditor,
+                        onClick = vm::toggleVelocityEditor,
+                    )
+                )
+                add(
+                    DockAction(
                         id = "velocity",
                         icon = Icons.Rounded.GraphicEq,
-                        label = "ベロシティ",
+                        label = "v を揃える",
                         onClick = onVelocity,
+                    )
+                )
+                add(
+                    DockAction(
+                        id = "multiSelect",
+                        icon = Icons.Rounded.HighlightAlt,
+                        label = if (ui.prefs.multiSelectMode) "複数選択 ON" else "複数選択",
+                        active = ui.prefs.multiSelectMode,
+                        onClick = vm::toggleMultiSelectMode,
                     )
                 )
                 add(
@@ -1773,10 +1811,15 @@ private fun ContextDock(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = if (selectionCount == 0) {
-                        "入力 ${ui.prefs.inputDuration.label} ・ グリッド ${ui.prefs.grid.label} ・ スナップ ${if (ui.prefs.snapEnabled) "ON" else "OFF"}"
-                    } else {
-                        "$selectionCount / ${project.notes.size} ノートを選択"
+                    text = when {
+                        ui.prefs.multiSelectMode && selectionCount == 0 ->
+                            "複数選択 ON ・ ドラッグで範囲選択 / ノートをタップで追加"
+                        ui.prefs.multiSelectMode ->
+                            "複数選択 ON ・ $selectionCount / ${project.notes.size} ノートを選択"
+                        selectionCount == 0 ->
+                            "入力 ${ui.prefs.inputDuration.label} ・ グリッド ${ui.prefs.grid.label} ・ スナップ ${if (ui.prefs.snapEnabled) "ON" else "OFF"}"
+                        else ->
+                            "$selectionCount / ${project.notes.size} ノートを選択"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = if (selectionCount == 0) Mist else MaterialTheme.colorScheme.secondary,

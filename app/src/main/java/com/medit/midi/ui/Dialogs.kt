@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.rounded.NoteAdd
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Audiotrack
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -1120,12 +1121,25 @@ fun HelpDialog(onDismiss: () -> Unit) {
         )
         Spacer(Modifier.height(12.dp))
         HelpSection(
+            "ベロシティ編集 / 複数選択",
+            Icons.Rounded.BarChart,
+            listOf(
+                "下部ツールバーの「ベロシティ編集」で、ピアノロール下部にベロシティグラフを重ねて表示します。",
+                "グラフ上のノードを上下にドラッグすると、そのノートのベロシティを変更します。",
+                "複数ノートを選択しているときは、選択中のノードをまとめて上下に動かせます。",
+                "「複数選択」をオンにすると、ドラッグで範囲選択し、ノートをタップすると選択に追加 / 解除できます。",
+                "複数選択中はノートの移動・長さ変更は一時停止します。終わったらボタンをオフに戻してください。",
+            ),
+        )
+        Spacer(Modifier.height(12.dp))
+        HelpSection(
             "下部ツールバー",
             Icons.Rounded.Tune,
             listOf(
                 "選択中は、長さ・ベロシティ・移調・複製・コピー・カット・削除・クオンタイズ・ループ範囲が使えます。",
                 "未選択時は、グリッド・入力長・スナップ・入力ベロシティ・全クオンタイズ・全選択が使えます。",
                 "拡大 / 縮小 / 全体表示は時間軸と音高軸の両方に効きます。",
+                "「v を揃える」は選択中のノートのベロシティを同じ値にします。",
             ),
         )
         Spacer(Modifier.height(12.dp))

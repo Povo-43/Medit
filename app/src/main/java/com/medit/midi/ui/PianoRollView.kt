@@ -172,6 +172,7 @@ class PianoRollView @JvmOverloads constructor(
         LOOP_DRAG,
         KEY_PREVIEW,
         ERASE,
+        VELOCITY_DRAG,
     }
 
     private var mode = Mode.NONE
@@ -214,6 +215,17 @@ class PianoRollView @JvmOverloads constructor(
     private var marqueeEndX = 0f
     private var marqueeEndY = 0f
     private var marqueeSelection: Set<Long> = emptySet()
+    private var marqueeBaseSelection: Set<Long> = emptySet()
+
+    // Velocity graph overlay. Dragging a node previews locally and the whole
+    // gesture is committed as one undo step on release.
+    private var velocityPrimaryId: Long? = null
+    private var velocityOriginals: List<Note> = emptyList()
+    private var velocityPreview: List<Note>? = null
+    private var velocityDownY = 0f
+    private var velocityMoved = false
+    private var velocityDisplayPitch: Int? = null
+    private var velocityDisplayVelocity: Int? = null
 
     private var loopDragHandle = 0 // 1 start, 2 end, 3 new range
     private var loopDragStart = 0
@@ -306,6 +318,11 @@ class PianoRollView @JvmOverloads constructor(
         if (projectChanged) {
             rebuildMeter()
             notesByPitch = project?.notes?.groupBy { it.pitch } ?: emptyMap()
+            velocityPreview = null
+            velocityPrimaryId = null
+            velocityOriginals = emptyList()
+            velocityDisplayPitch = null
+            velocityDisplayVelocity = null
         }
 
         if (first || epoch != viewportEpoch) {
@@ -474,6 +491,30 @@ class PianoRollView @JvmOverloads constructor(
     private fun visibleRows(): Float =
         ((contentBottom - contentTop) / rowPx).coerceAtLeast(1f)
 
+    /** Height of the velocity graph overlay, clamped so it stays usable. */
+    private val velocityLaneHeight: Float
+        get() = ((contentBottom - contentTop) * 0.30f).coerceIn(dp(84f), dp(148f))
+
+    private val velocityLaneTop: Float get() = contentBottom - velocityLaneHeight
+
+    private fun velocityToY(velocity: Int): Float {
+        val top = velocityLaneTop + dp(20f)
+        val bottom = contentBottom - dp(10f)
+        val frac = (velocity.coerceIn(1, 127) - 1) / 126f
+        return bottom - frac * (bottom - top).coerceAtLeast(dp(1f))
+    }
+
+    private fun velocityDeltaForDy(dy: Float): Int {
+        val top = velocityLaneTop + dp(20f)
+        val bottom = contentBottom - dp(10f)
+        val span = (bottom - top).coerceAtLeast(dp(1f))
+        return (-dy / span * 126f).roundToInt()
+    }
+
+    private fun velocityLaneContains(x: Float, y: Float): Boolean =
+        prefs.velocityEditor && velocityLaneTop >= contentTop + dp(20f) &&
+            x >= contentLeft && y >= velocityLaneTop && y <= contentBottom
+
     private fun clampViewport() {
         rowHeightDp = rowHeightDp.coerceIn(MIN_ROW_HEIGHT, MAX_ROW_HEIGHT)
         dpPerTick = dpPerTick.coerceIn(MIN_DP_PER_TICK, MAX_DP_PER_TICK)
@@ -591,6 +632,7 @@ class PianoRollView @JvmOverloads constructor(
                 mode = Mode.LOOP_DRAG
                 beginLoopDrag(downX)
             }
+            velocityLaneContains(downX, downY) -> beginVelocityTouch(event)
             else -> beginRollTouch(event)
         }
         invalidate()
@@ -608,6 +650,25 @@ class PianoRollView @JvmOverloads constructor(
                 performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
             } else {
                 mode = Mode.NONE
+            }
+            return
+        }
+
+        // Multi-select is an explicit tool mode: a tap toggles one note and a
+        // drag (from a note or empty space) sweeps an additive marquee. Note
+        // moving/resizing is intentionally suspended while it is on.
+        if (prefs.multiSelectMode) {
+            downPitch = pitchAtY(event.y)
+            if (note != null) {
+                downNoteId = note.id
+                downZone = zoneFor(note, event.x, event.y, null)
+                activeNoteIds = selectionIds
+                dragOriginals = p.notes.filter { it.id in activeNoteIds }
+                dragPrimary = note
+                mode = Mode.PENDING_NOTE
+            } else {
+                downNoteId = null
+                mode = Mode.PENDING_EMPTY
             }
             return
         }
@@ -644,6 +705,56 @@ class PianoRollView @JvmOverloads constructor(
         }
     }
 
+    private fun beginVelocityTouch(event: MotionEvent) {
+        val p = project
+        val note = if (p != null) findVelocityNodeAt(event.x, event.y) else null
+        if (note == null) {
+            // Empty part of the lane keeps the familiar scroll gesture, or
+            // starts an additive marquee while the multi-select tool is on.
+            if (prefs.multiSelectMode) {
+                beginMarquee(clearExisting = false)
+            } else {
+                beginPan()
+            }
+            return
+        }
+        downNoteId = note.id
+        velocityPrimaryId = note.id
+        velocityOriginals = emptyList()
+        velocityPreview = null
+        velocityMoved = false
+        velocityDownY = event.y
+        velocityDisplayPitch = note.pitch
+        velocityDisplayVelocity = note.velocity
+        val current = host?.selection() ?: selectionIds
+        activeNoteIds = if (note.id in current && current.size > 1) current else setOf(note.id)
+        if (current != activeNoteIds) host?.setRollSelection(activeNoteIds)
+        selectionIds = activeNoteIds
+        velocityOriginals = p?.notes?.filter { it.id in activeNoteIds } ?: emptyList()
+        mode = Mode.VELOCITY_DRAG
+        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+    }
+
+    private fun findVelocityNodeAt(x: Float, y: Float): Note? {
+        val p = project ?: return null
+        val radius = dp(22f)
+        var best: Note? = null
+        var bestDistance = radius * radius
+        for (note in p.notes) {
+            val nx = tickToX(note.startTick)
+            if (nx < contentLeft - dp(6f) || nx > contentRight + dp(6f)) continue
+            val ny = velocityToY(note.velocity)
+            val dx = x - nx
+            val dy = y - ny
+            val distance = dx * dx + dy * dy
+            if (distance <= bestDistance) {
+                bestDistance = distance
+                best = note
+            }
+        }
+        return best
+    }
+
     private fun updateTouch(event: MotionEvent) {
         if (mode == Mode.PINCH) {
             updatePinch(event)
@@ -664,23 +775,34 @@ class PianoRollView @JvmOverloads constructor(
             Mode.PENDING_EMPTY -> {
                 if (distance > touchSlop) {
                     cancelLongPressTimer()
-                    beginPan()
-                    applyPan(dx, dy)
+                    if (prefs.multiSelectMode) {
+                        beginMarquee(clearExisting = false)
+                        updateMarquee(x, y)
+                    } else {
+                        beginPan()
+                        applyPan(dx, dy)
+                    }
                 }
             }
             Mode.PENDING_NOTE -> {
                 if (distance > touchSlop) {
                     cancelLongPressTimer()
-                    val stylus = isStylus(event)
-                    if (!prefs.fingerEditing && !stylus) {
-                        beginPan()
-                        applyPan(dx, dy)
+                    if (prefs.multiSelectMode) {
+                        beginMarquee(clearExisting = false)
+                        updateMarquee(x, y)
                     } else {
-                        beginNoteDrag()
-                        applyNoteDrag(x, y)
+                        val stylus = isStylus(event)
+                        if (!prefs.fingerEditing && !stylus) {
+                            beginPan()
+                            applyPan(dx, dy)
+                        } else {
+                            beginNoteDrag()
+                            applyNoteDrag(x, y)
+                        }
                     }
                 }
             }
+            Mode.VELOCITY_DRAG -> applyVelocityDrag(y)
             Mode.PAN -> applyPan(dx, dy)
             Mode.DRAW -> {
                 val tick = snapIfEnabled(xToTick(x).toInt()).coerceAtLeast(0)
@@ -707,7 +829,7 @@ class PianoRollView @JvmOverloads constructor(
         cancelLongPressTimer()
         when (mode) {
             Mode.PENDING_EMPTY -> {
-                if (prefs.fingerEditing) {
+                if (prefs.fingerEditing && !prefs.multiSelectMode) {
                     val tick = snapIfEnabled(downTick.toInt()).coerceAtLeast(0)
                     host?.addNoteAt(downPitch, tick, inputDurationTicks())
                 }
@@ -716,29 +838,61 @@ class PianoRollView @JvmOverloads constructor(
                 val id = downNoteId
                 if (id != null) {
                     val current = host?.selection() ?: selectionIds
-                    if (id !in current) host?.setRollSelection(setOf(id))
-                    val now = SystemClock.uptimeMillis()
-                    val editAllowed = prefs.fingerEditing || isStylus(event)
-                    if (editAllowed &&
-                        lastTapNoteId == id &&
-                        now - lastTapAt <= 350 &&
-                        kotlin.math.sqrt(
-                            (downX - lastTapX) * (downX - lastTapX) +
-                                (downY - lastTapY) * (downY - lastTapY)
-                        ) < dp(48f)
-                    ) {
-                        // Double-tap deletes the note. Numeric editing stays
-                        // available from the dock and the hover toolbar.
-                        host?.deleteNoteByDoubleTap(id)
+                    if (prefs.multiSelectMode) {
+                        // Tapping toggles the note in the current selection.
+                        val next = if (id in current) current - id else current + id
+                        host?.setRollSelection(next)
+                        selectionIds = next
+                        project?.noteById(id)?.let { host?.previewNote(it.pitch, it.velocity) }
                         lastTapNoteId = null
                     } else {
-                        project?.noteById(id)?.let { host?.previewNote(it.pitch, it.velocity) }
-                        lastTapNoteId = id
-                        lastTapAt = now
-                        lastTapX = downX
-                        lastTapY = downY
+                        if (id !in current) host?.setRollSelection(setOf(id))
+                        val now = SystemClock.uptimeMillis()
+                        val editAllowed = prefs.fingerEditing || isStylus(event)
+                        if (editAllowed &&
+                            lastTapNoteId == id &&
+                            now - lastTapAt <= 350 &&
+                            kotlin.math.sqrt(
+                                (downX - lastTapX) * (downX - lastTapX) +
+                                    (downY - lastTapY) * (downY - lastTapY)
+                            ) < dp(48f)
+                        ) {
+                            // Double-tap deletes the note. Numeric editing stays
+                            // available from the dock and the hover toolbar.
+                            host?.deleteNoteByDoubleTap(id)
+                            lastTapNoteId = null
+                        } else {
+                            project?.noteById(id)?.let { host?.previewNote(it.pitch, it.velocity) }
+                            lastTapNoteId = id
+                            lastTapAt = now
+                            lastTapX = downX
+                            lastTapY = downY
+                        }
                     }
                 }
+            }
+            Mode.VELOCITY_DRAG -> {
+                val id = velocityPrimaryId
+                val preview = velocityPreview
+                if (velocityMoved && preview != null && preview != project?.notes) {
+                    host?.commitRollNotes(preview)
+                } else if (!velocityMoved && id != null) {
+                    val current = host?.selection() ?: selectionIds
+                    val next = when {
+                        prefs.multiSelectMode ->
+                            if (id in current) current - id else current + id
+                        id in current && current.size > 1 -> current
+                        else -> setOf(id)
+                    }
+                    host?.setRollSelection(next)
+                    selectionIds = next
+                    project?.noteById(id)?.let { host?.previewNote(it.pitch, it.velocity) }
+                }
+                velocityPreview = null
+                velocityOriginals = emptyList()
+                velocityPrimaryId = null
+                velocityDisplayPitch = null
+                velocityDisplayVelocity = null
             }
             Mode.DRAW -> {
                 val start = drawStartTick.coerceAtLeast(0)
@@ -773,6 +927,12 @@ class PianoRollView @JvmOverloads constructor(
         dragOriginals = emptyList()
         dragPrimary = null
         dragPreview = null
+        marqueeBaseSelection = emptySet()
+        velocityPreview = null
+        velocityOriginals = emptyList()
+        velocityPrimaryId = null
+        velocityDisplayPitch = null
+        velocityDisplayVelocity = null
         handler.removeCallbacks(hoverClearRunnable)
         hoverClearScheduled = true
         handler.postDelayed(hoverClearRunnable, 60)
@@ -789,6 +949,12 @@ class PianoRollView @JvmOverloads constructor(
         keyPreviewPitch = null
         loopDragging = false
         downNoteId = null
+        marqueeBaseSelection = emptySet()
+        velocityPreview = null
+        velocityOriginals = emptyList()
+        velocityPrimaryId = null
+        velocityDisplayPitch = null
+        velocityDisplayVelocity = null
         invalidate()
     }
 
@@ -986,6 +1152,27 @@ class PianoRollView @JvmOverloads constructor(
         }
     }
 
+    private fun applyVelocityDrag(y: Float) {
+        val p = project ?: return
+        if (velocityOriginals.isEmpty()) return
+        val dy = y - velocityDownY
+        if (!velocityMoved && abs(dy) > touchSlop * 0.5f) velocityMoved = true
+        if (!velocityMoved) return
+        val delta = velocityDeltaForDy(dy)
+        val changed = HashMap<Long, Int>(velocityOriginals.size * 2)
+        velocityOriginals.forEach { note ->
+            changed[note.id] = (note.velocity + delta).coerceIn(1, 127)
+        }
+        velocityPreview = p.notes.map { note ->
+            val velocity = changed[note.id]
+            if (velocity != null && velocity != note.velocity) note.copy(velocity = velocity) else note
+        }
+        val primary = velocityPreview?.firstOrNull { it.id == velocityPrimaryId } ?: return
+        velocityDisplayPitch = primary.pitch
+        velocityDisplayVelocity = primary.velocity
+        maybePreview(primary.pitch, primary.velocity)
+    }
+
     private fun maybePreview(pitch: Int, velocity: Int) {
         val now = SystemClock.uptimeMillis()
         if (pitch != lastPreviewPitch || now - lastPreviewAt > 130) {
@@ -1005,6 +1192,7 @@ class PianoRollView @JvmOverloads constructor(
         val bottom = max(marqueeStartY, y)
         tmpRect.set(left, top, right, bottom)
         val ids = LinkedHashSet<Long>()
+        ids.addAll(marqueeBaseSelection)
         p.notes.forEach { note ->
             val noteRect = noteRect(note, RectF())
             if (RectF.intersects(noteRect, tmpRect)) ids.add(note.id)
@@ -1013,6 +1201,23 @@ class PianoRollView @JvmOverloads constructor(
             marqueeSelection = ids
             host?.setRollSelection(ids)
         }
+    }
+
+    private fun beginMarquee(clearExisting: Boolean) {
+        mode = Mode.MARQUEE
+        marqueeStartX = downX
+        marqueeStartY = downY
+        marqueeEndX = downX
+        marqueeEndY = downY
+        marqueeBaseSelection =
+            if (clearExisting) emptySet() else (host?.selection() ?: selectionIds)
+        marqueeSelection = marqueeBaseSelection
+        if (clearExisting) {
+            host?.setRollSelection(emptySet())
+            selectionIds = emptySet()
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        }
+        invalidate()
     }
 
     private fun beginLoopDrag(x: Float) {
@@ -1058,16 +1263,7 @@ class PianoRollView @JvmOverloads constructor(
         when (mode) {
             Mode.PENDING_EMPTY -> {
                 longPressFired = true
-                mode = Mode.MARQUEE
-                marqueeStartX = downX
-                marqueeStartY = downY
-                marqueeEndX = downX
-                marqueeEndY = downY
-                marqueeSelection = emptySet()
-                host?.setRollSelection(emptySet())
-                selectionIds = emptySet()
-                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                invalidate()
+                beginMarquee(clearExisting = !prefs.multiSelectMode)
             }
             Mode.PENDING_NOTE -> {
                 longPressFired = true
@@ -1300,6 +1496,7 @@ class PianoRollView @JvmOverloads constructor(
         drawLoopShade(canvas, p)
         drawNotes(canvas, p)
         drawGhost(canvas, p)
+        drawVelocityEditor(canvas, p)
         drawPlayheadLine(canvas)
         drawMarquee(canvas)
         drawEmptyHint(canvas, p)
@@ -1510,6 +1707,145 @@ class PianoRollView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Velocity graph overlaid on the lower part of the roll.
+     *
+     * Every note contributes one node at its start tick, connected by a line
+     * so the dynamic shape of the phrase is readable at a glance. Dragging a
+     * node vertically changes its velocity (and the whole selection when
+     * several notes are selected).
+     */
+    private fun drawVelocityEditor(canvas: Canvas, p: Project) {
+        if (!prefs.velocityEditor) return
+        val laneTop = velocityLaneTop
+        if (laneTop < contentTop + dp(20f)) return
+        val laneBottom = contentBottom
+
+        fillPaint.color = withAlpha(colPanel, 0.94f)
+        canvas.drawRect(contentLeft, laneTop, contentRight, laneBottom, fillPaint)
+        strokePaint.color = withAlpha(colSelected, 0.45f)
+        strokePaint.strokeWidth = dp(1f)
+        canvas.drawLine(contentLeft, laneTop, contentRight, laneTop, strokePaint)
+
+        val guides = intArrayOf(127, 96, 64, 32, 1)
+        strokePaint.pathEffect = DashPathEffect(floatArrayOf(dp(3f), dp(5f)), 0f)
+        smallTextPaint.textAlign = Paint.Align.RIGHT
+        smallTextPaint.textSize = sp(8f)
+        for (v in guides) {
+            val y = velocityToY(v)
+            strokePaint.color = withAlpha(colDim, if (v == 127 || v == 1) 0.32f else 0.16f)
+            canvas.drawLine(contentLeft, y, contentRight, y, strokePaint)
+            smallTextPaint.color = withAlpha(colDim, 0.75f)
+            canvas.drawText(v.toString(), contentRight - dp(6f), y - dp(2f), smallTextPaint)
+        }
+        strokePaint.pathEffect = null
+        smallTextPaint.textAlign = Paint.Align.LEFT
+
+        boldTextPaint.color = withAlpha(colText, 0.9f)
+        boldTextPaint.textSize = sp(9f)
+        canvas.drawText("VELOCITY", contentLeft + dp(8f), laneTop + dp(13f), boldTextPaint)
+
+        val notes = (velocityPreview ?: p.notes)
+            .filter {
+                val x = tickToX(it.startTick)
+                x >= contentLeft - dp(2f) && x <= contentRight + dp(2f)
+            }
+            .sortedWith(compareBy({ it.startTick }, { it.pitch }))
+
+        if (notes.isEmpty()) {
+            smallTextPaint.color = withAlpha(colDim, 0.85f)
+            smallTextPaint.textSize = sp(9.5f)
+            val hint = if (p.notes.isEmpty()) {
+                "ノートを追加すると、ここでベロシティを編集できます"
+            } else {
+                "表示範囲にノートがありません"
+            }
+            canvas.drawText(hint, contentLeft + dp(10f), laneTop + dp(31f), smallTextPaint)
+            return
+        }
+
+        val firstX = tickToX(notes.first().startTick)
+        val lastX = tickToX(notes.last().startTick)
+        val floorY = laneBottom - dp(8f)
+
+        // Shaded area under the curve.
+        path.reset()
+        path.moveTo(firstX, floorY)
+        notes.forEach { note ->
+            path.lineTo(tickToX(note.startTick), velocityToY(note.velocity))
+        }
+        path.lineTo(lastX, floorY)
+        path.close()
+        fillPaint.color = withAlpha(colSelected, 0.10f)
+        canvas.drawPath(path, fillPaint)
+
+        // Stems make each node's value easy to compare.
+        for (note in notes) {
+            val x = tickToX(note.startTick)
+            val y = velocityToY(note.velocity)
+            strokePaint.color = withAlpha(
+                if (note.id in selectionIds) colSelected else colNote,
+                0.38f,
+            )
+            strokePaint.strokeWidth = dp(1.2f)
+            canvas.drawLine(x, y, x, floorY, strokePaint)
+        }
+
+        // Connected graph line.
+        if (notes.size > 1) {
+            path.reset()
+            notes.forEachIndexed { index, note ->
+                val x = tickToX(note.startTick)
+                val y = velocityToY(note.velocity)
+                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            strokePaint.color = withAlpha(colSelected, 0.9f)
+            strokePaint.strokeWidth = dp(2f)
+            canvas.drawPath(path, strokePaint)
+        }
+
+        // Nodes (larger and outlined when selected or being dragged).
+        for (note in notes) {
+            val x = tickToX(note.startTick)
+            val y = velocityToY(note.velocity)
+            val selected = note.id in selectionIds
+            val primary = note.id == velocityPrimaryId
+            val radius = if (selected || primary) dp(5.5f) else dp(4f)
+            notePaint.color = if (selected || primary) colSelected else colNote
+            canvas.drawCircle(x, y, radius, notePaint)
+            noteStroke.color = withAlpha(colText, if (primary) 1f else 0.7f)
+            noteStroke.strokeWidth = if (primary) dp(2f) else dp(1f)
+            canvas.drawCircle(x, y, radius, noteStroke)
+        }
+
+        val displayPitch = velocityDisplayPitch
+        val displayVelocity = velocityDisplayVelocity
+        if (displayPitch != null && displayVelocity != null) {
+            val label = "${noteName(displayPitch)}  v$displayVelocity"
+            boldTextPaint.textSize = sp(10.5f)
+            boldTextPaint.color = colText
+            val width = boldTextPaint.measureText(label) + dp(16f)
+            val top = laneTop + dp(5f)
+            hudRect.set(
+                contentRight - width - dp(8f),
+                top,
+                contentRight - dp(8f),
+                top + dp(21f),
+            )
+            fillPaint.color = withAlpha(0xFF0A0E12.toInt(), 0.94f)
+            canvas.drawRoundRect(hudRect, dp(7f), dp(7f), fillPaint)
+            strokePaint.color = withAlpha(colSelected, 0.8f)
+            strokePaint.strokeWidth = dp(1f)
+            canvas.drawRoundRect(hudRect, dp(7f), dp(7f), strokePaint)
+            canvas.drawText(
+                label,
+                hudRect.left + dp(8f),
+                hudRect.centerY() - (boldTextPaint.ascent() + boldTextPaint.descent()) / 2f,
+                boldTextPaint,
+            )
+        }
+    }
+
     private fun drawPlayheadLine(canvas: Canvas) {
         val tick = host?.playheadTick() ?: 0.0
         val x = tickToX(tick)
@@ -1700,8 +2036,15 @@ class PianoRollView @JvmOverloads constructor(
         val maxScroll = (totalTicks - visibleTicks()).coerceAtLeast(1.0)
         val scrollFrac = (startTick / maxScroll).toFloat().coerceIn(0f, 1f)
         val thumbX = contentLeft + (contentW - thumbW) * scrollFrac
+        val scrollbarBottom =
+            if (prefs.velocityEditor) velocityLaneTop - dp(2f) else contentBottom
         fillPaint.color = withAlpha(colText, alpha)
-        tmpRect.set(thumbX, contentBottom - dp(4f), thumbX + thumbW, contentBottom - dp(1f))
+        tmpRect.set(
+            thumbX,
+            scrollbarBottom - dp(4f),
+            thumbX + thumbW,
+            scrollbarBottom - dp(1f),
+        )
         canvas.drawRoundRect(tmpRect, dp(1.5f), dp(1.5f), fillPaint)
 
         val rows = visibleRows()
