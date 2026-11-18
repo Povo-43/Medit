@@ -112,7 +112,7 @@ MeditDAW は Medit のピアノロール編集モデルを共有しつつ、ト�
 
 - パッケージ: `com.medit.daw`
 - アプリ名: MeditDAW
-- バージョン: 0.2.0 / versionCode 2
+- バージョン: 3.0.1 / versionCode 3
 - 出力 APK: `daw/build/outputs/apk/debug/daw-debug.apk`（開発用） / `daw/build/outputs/apk/release/daw-release.apk`（配布用）
 
 ### 主な機能
