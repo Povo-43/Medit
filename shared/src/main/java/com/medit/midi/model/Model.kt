@@ -87,8 +87,9 @@ data class Track(
     val isDrum: Boolean = false,
     /**
      * Sound source selected for this track. "bundled" is the piano that ships
-     * with the app; any other value is an instrument-library entry. Medit
-     * ignores this field and keeps using its single global SoundFont.
+     * with the app; any other value is an instrument-library entry or an
+     * AAP plugin ID. Medit ignores this field and keeps using its single
+     * global SoundFont.
      */
     val soundId: String = "bundled",
     /** Index into the sound source's preset list. */
@@ -97,9 +98,16 @@ data class Track(
     val volume: Float = 1f,
     val muted: Boolean = false,
     val solo: Boolean = false,
+    /** AAP plugin ID when this track uses an AndroidAudioPlugin instrument. */
+    val pluginId: String? = null,
+    /** Serialised plugin parameters (JSON) for AAP plugin tracks. */
+    val pluginParams: String? = null,
 ) {
     val noteCount: Int get() = notes.size
     fun sortedNotes(): List<Note> = notes.sortedWith(compareBy({ it.startTick }, { it.pitch }))
+
+    /** True when this track uses an AAP plugin instead of a SoundFont. */
+    val isAapPlugin: Boolean get() = pluginId != null
 }
 
 data class TempoPoint(val tick: Int, val bpm: Double)

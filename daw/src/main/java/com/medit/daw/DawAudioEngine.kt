@@ -1,25 +1,29 @@
 package com.medit.daw
 
+import android.content.Context
 import com.medit.midi.audio.PianoSynth
 import com.medit.midi.audio.SoundFont
 import com.medit.midi.model.Project
+import org.androidaudioplugin.PluginInformation
+import org.androidaudioplugin.hosting.AudioPluginInstance
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Realtime mixer for MeditDAW. Each track gets its own [PianoSynth] instance
+ * Realtime mixer for MeditDAW. Each track gets its own [TrackSynth] instance
  * (one AudioTrack per track); Android mixes those outputs. Mute, solo and
  * faders are applied as per-synth gains, so changing the mixer never has to
  * rebuild voices.
  *
- * SoundFont objects are shared between tracks that use the same bank; only the
- * voice state and AudioTrack are per track.
+ * Tracks can use either a bundled SoundFont (via [PianoSynthAdapter]) or an
+ * AAP (AndroidAudioPlugin) plugin (via [AapSynth]). SoundFont objects are
+ * shared between tracks that use the same bank; only the voice state and
+ * AudioTrack are per track.
  */
-class DawAudioEngine {
+class DawAudioEngine(private val context: Context) {
 
     private data class TrackOutput(
-        val baseFont: SoundFont,
-        val presetIndex: Int,
-        val synth: PianoSynth,
+        val synth: TrackSynth,
+        val isAap: Boolean,
     )
 
     @Volatile private var outputs: Map<Int, TrackOutput> = emptyMap()
@@ -30,37 +34,57 @@ class DawAudioEngine {
     @Volatile private var lastError: String? = null
 
     /**
-     * Rebuilds track outputs for [project]. [fonts] maps track index to the
-     * bank loaded by the instrument library. Tracks without a font stay silent.
+     * Rebuilds track outputs for [project].
+     *
+     * [soundFonts] maps track index to the SoundFont loaded by the instrument
+     * library. [aapPlugins] maps track index to the AAP plugin instance.
+     * Tracks without a usable sound source stay silent.
      */
     @Synchronized
-    fun sync(project: Project, fonts: Map<Int, SoundFont?>) {
+    fun sync(
+        project: Project,
+        soundFonts: Map<Int, SoundFont?>,
+        aapPlugins: Map<Int, Pair<AudioPluginInstance, PluginInformation>?>,
+    ) {
         val anySolo = project.tracks.any { it.solo }
         val next = HashMap<Int, TrackOutput>()
         val nextGains = HashMap<Int, Float>()
         for ((index, track) in project.tracks.withIndex()) {
-            val base = fonts[index] ?: continue
-            val preset = base.availablePresets.getOrNull(track.presetIndex)?.index ?: 0
-            val existing = outputs[index]
-            val output = if (
-                existing != null &&
-                existing.baseFont === base &&
-                existing.presetIndex == preset
-            ) {
-                existing
-            } else {
+            val output = if (track.isAapPlugin) {
+                val pluginPair = aapPlugins[index]
+                if (pluginPair == null) continue
+                val (plugin, info) = pluginPair
                 try {
-                    val synth = PianoSynth(base.withPreset(preset))
-                    TrackOutput(base, preset, synth)
+                    AapSynth(plugin, info)
+                } catch (t: Throwable) {
+                    lastError = "AAPプラグインを初期化できません: ${t.message ?: t.javaClass.simpleName}"
+                    continue
+                }
+            } else {
+                val base = soundFonts[index] ?: continue
+                val preset = base.availablePresets.getOrNull(track.presetIndex)?.index ?: 0
+                try {
+                    PianoSynthAdapter.create(base, preset)
                 } catch (t: Throwable) {
                     lastError = "音源を初期化できません: ${t.message ?: t.javaClass.simpleName}"
                     continue
                 }
             }
+            val existing = outputs[index]
+            // Reuse existing synth if it's the same type and configuration
+            val finalOutput = if (
+                existing != null &&
+                existing.isAap == track.isAapPlugin &&
+                (!track.isAapPlugin || existing.synth is AapSynth)
+            ) {
+                existing.synth
+            } else {
+                output
+            }
             val audible = if (anySolo) track.solo && !track.muted else !track.muted
             val gain = if (audible) track.volume else 0f
-            output.synth.setMasterVolume((gain * globalVolume).coerceIn(0f, 2f))
-            next[index] = output
+            finalOutput.setMasterVolume((gain * globalVolume).coerceIn(0f, 2f))
+            next[index] = TrackOutput(finalOutput, track.isAapPlugin)
             nextGains[index] = gain
         }
         val old = outputs

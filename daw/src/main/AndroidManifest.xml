@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-sdk tools:overrideLibrary="org.androidaudioplugin" />
+
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="true" />
@@ -12,13 +14,21 @@
         android:name="android.software.midi"
         android:required="false" />
 
+    <!-- AAP (AndroidAudioPlugin) host: query installed AAP plugin services -->
+    <queries>
+        <intent>
+            <action android:name="org.androidaudioplugin.AudioPluginService.V4" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MeditDaw">
+        android:theme="@style/Theme.MeditDaw"
+        tools:overrideLibrary="org.androidaudioplugin">
 
         <activity
             android:name=".MainActivity"
