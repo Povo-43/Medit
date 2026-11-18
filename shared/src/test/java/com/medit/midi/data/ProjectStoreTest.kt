@@ -10,6 +10,7 @@ import com.medit.midi.model.TimeSignaturePoint
 import com.medit.midi.model.Track
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -153,5 +154,66 @@ class ProjectStoreTest {
         val data = AutosaveData(project = original, viewport = ViewportState(), prefs = EditorPrefs(), savedAtMillis = 0)
         val json = ProjectStore.encode(data).toString()
         assertTrue(json.contains("\"version\":3"))
+    }
+
+    @Test
+    fun trackAapPluginFieldsRoundTripThroughJson() {
+        val original = Project(
+            title = "AAP Test",
+            ppq = 480,
+            tracks = listOf(
+                Track(
+                    name = "Synth",
+                    channel = 0,
+                    soundId = "bundled",
+                    presetIndex = 0,
+                    volume = 1.0f,
+                    muted = false,
+                    solo = false,
+                    pluginId = "urn:lv2:example:synth",
+                    pluginParams = "{\"cutoff\": 1000.0, \"resonance\": 0.5}",
+                ),
+                Track(
+                    name = "Piano",
+                    channel = 1,
+                    soundId = "bundled",
+                    presetIndex = 0,
+                    volume = 1.0f,
+                    muted = false,
+                    solo = false,
+                ),
+            ),
+            activeTrack = 0,
+            bpm = 120.0,
+            timeSignature = TimeSignature(4, 4),
+        )
+        val data = AutosaveData(project = original, viewport = ViewportState(), prefs = EditorPrefs(), savedAtMillis = 0)
+        val restored = roundTrip(data)
+
+        val track0 = restored.project.tracks[0]
+        assertEquals("urn:lv2:example:synth", track0.pluginId)
+        assertEquals("{\"cutoff\": 1000.0, \"resonance\": 0.5}", track0.pluginParams)
+        assertTrue(track0.isAapPlugin)
+
+        val track1 = restored.project.tracks[1]
+        assertNull(track1.pluginId)
+        assertNull(track1.pluginParams)
+        assertFalse(track1.isAapPlugin)
+    }
+
+    @Test
+    fun trackIsAapPluginDefaultsToFalse() {
+        val track = Track(name = "Piano", channel = 0)
+        assertFalse(track.isAapPlugin)
+        assertNull(track.pluginId)
+        assertNull(track.pluginParams)
+
+        val aapTrack = Track(
+            name = "Synth",
+            channel = 0,
+            pluginId = "urn:lv2:example:synth",
+        )
+        assertTrue(aapTrack.isAapPlugin)
+        assertEquals("urn:lv2:example:synth", aapTrack.pluginId)
     }
 }
