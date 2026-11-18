@@ -36,6 +36,8 @@ class PianoSynthAdapter(private val synth: PianoSynth) : TrackSynth {
         synth.close()
     }
 
+    override fun getLatencyInfo(): TrackSynth.LatencyInfo? = null
+
     companion object {
         fun create(soundFont: SoundFont, presetIndex: Int): PianoSynthAdapter {
             val font = if (presetIndex == 0) soundFont else soundFont.withPreset(presetIndex)

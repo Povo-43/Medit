@@ -30,4 +30,17 @@ interface TrackSynth {
 
     /** Release native resources. Must be called from the UI thread. */
     fun close()
+
+    /** Returns latency information for debugging and measurement. */
+    fun getLatencyInfo(): LatencyInfo?
+
+    /** Latency information for a track synth. */
+    data class LatencyInfo(
+        val audioTrackBufferSizeBytes: Int,
+        val audioTrackLatencyMs: Float,
+        val chunkFrames: Int,
+        val chunkLatencyMs: Float,
+        val portMinBytes: Int,
+        val estimatedTotalLatencyMs: Float,
+    )
 }

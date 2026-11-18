@@ -62,6 +62,8 @@ class AapSynth(
     private val audioOutputPortIndex: Int
     /** Minimum buffer size in bytes required by the audio output port. */
     private val audioOutputPortMinBytes: Int
+    /** AudioTrack buffer size in bytes, captured at initialization. */
+    private val audioTrackBufferSizeBytes: Int
     private val portBuffer: ByteBuffer
 
     init {
@@ -97,6 +99,7 @@ class AapSynth(
         )
         if (minBuffer <= 0) throw IllegalStateException("オーディオバッファを作成できません ($minBuffer)")
         val bufferBytes = maxOf(minBuffer * 2, chunkFrames * 4 * 3)
+        audioTrackBufferSizeBytes = bufferBytes
         val format = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .setSampleRate(outputSampleRate)
@@ -271,6 +274,22 @@ class AapSynth(
         plugin.destroy()
         audioTrack.stop()
         audioTrack.release()
+    }
+
+    /** Returns latency information for debugging and measurement. */
+    override fun getLatencyInfo(): TrackSynth.LatencyInfo? {
+        val audioTrackBufferSize = audioTrackBufferSizeBytes
+        val audioTrackLatencyMs = (audioTrackBufferSize.toDouble() / (outputSampleRate * 2 * 2) * 1000.0).toFloat()
+        // 2 bytes per sample, 2 channels
+        val chunkLatencyMs = (chunkFrames.toDouble() / outputSampleRate * 1000.0).toFloat()
+        return TrackSynth.LatencyInfo(
+            audioTrackBufferSizeBytes = audioTrackBufferSize,
+            audioTrackLatencyMs = audioTrackLatencyMs,
+            chunkFrames = chunkFrames,
+            chunkLatencyMs = chunkLatencyMs,
+            portMinBytes = audioOutputPortMinBytes,
+            estimatedTotalLatencyMs = audioTrackLatencyMs + chunkLatencyMs,
+        )
     }
 
     companion object {
