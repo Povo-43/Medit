@@ -1,4 +1,4 @@
-name: Build and Release APK
+name: Build and Release APKs
 
 on:
   push:
@@ -15,9 +15,27 @@ concurrency:
 
 jobs:
   build:
-    name: Test, lint and build APK
+    name: Build ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Medit
+            module: app
+            gradle_module: :app
+            package: com.medit.midi
+            apk: app/build/outputs/apk/release/app-release.apk
+            build_file: app/build.gradle.kts
+            artifact: medit-apk
+          - name: MeditDAW
+            module: daw
+            gradle_module: :daw
+            package: com.medit.daw
+            apk: daw/build/outputs/apk/release/daw-release.apk
+            build_file: daw/build.gradle.kts
+            artifact: meditdaw-apk
 
     steps:
       - name: Checkout
@@ -71,61 +89,71 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Unit tests
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+        run: |
+          ./gradlew :shared:testDebugUnitTest ${{ matrix.gradle_module }}:testDebugUnitTest --no-daemon --stacktrace
 
       - name: Lint
-        run: ./gradlew :app:lintDebug --no-daemon --stacktrace
+        run: ./gradlew ${{ matrix.gradle_module }}:lintDebug --no-daemon --stacktrace
 
       - name: Build signed release APK
-        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+        run: ./gradlew ${{ matrix.gradle_module }}:assembleRelease --no-daemon --stacktrace
 
       - name: Verify APK integrity
         run: |
           set -euo pipefail
           BUILD_TOOLS="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}/build-tools/34.0.0"
-          APK=app/build/outputs/apk/release/app-release.apk
+          APK="${{ matrix.apk }}"
           test -f "${APK}"
-          # Reject unaligned archives: unaligned resources.arsc fails to install on API 30+.
           "${BUILD_TOOLS}/zipalign" -c 4 "${APK}"
-          # The APK must carry and verify the v2/v3 signature schemes (mandatory for targetSdk 34),
-          # and must contain JAR (v1) signature material for legacy package parsers.
           "${BUILD_TOOLS}/apksigner" verify --verbose "${APK}" | tee /dev/stderr | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
           "${BUILD_TOOLS}/apksigner" verify --verbose "${APK}" | grep -q "Verified using v3 scheme (APK Signature Scheme v3): true"
           test -n "$(unzip -l "${APK}" | awk '/META-INF\/MANIFEST.MF/')"
-          # The package must be parseable by aapt2 and match the expected package.
           BADGING=$("${BUILD_TOOLS}/aapt2" dump badging "${APK}")
           echo "${BADGING}" | head -3
-          echo "${BADGING}" | grep -q "^package: name='com.medit.midi'"
+          echo "${BADGING}" | grep -q "^package: name='${{ matrix.package }}'"
 
       - name: Prepare release artifact
         id: artifact
         run: |
           set -euo pipefail
-          VERSION_NAME=$(sed -n 's/.*versionName = "\(.*\)"/\1/p' app/build.gradle.kts | head -1)
+          VERSION_NAME=$(sed -n 's/.*versionName = "\(.*\)"/\1/p' "${{ matrix.build_file }}" | head -1)
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             SUFFIX="${GITHUB_REF_NAME}"
           else
             SUFFIX="dev-${GITHUB_SHA::7}"
           fi
-          NAME="Medit-${VERSION_NAME}-${SUFFIX}.apk"
+          NAME="${{ matrix.name }}-${VERSION_NAME}-${SUFFIX}.apk"
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk "dist/${NAME}"
+          cp "${{ matrix.apk }}" "dist/${NAME}"
           (cd dist && sha256sum "${NAME}" > "${NAME}.sha256")
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          echo "apk=dist/${NAME}" >> "$GITHUB_OUTPUT"
-          echo "sha256=dist/${NAME}.sha256" >> "$GITHUB_OUTPUT"
           echo "Prepared ${NAME}"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: midi-edit-mobile-apk
+          name: ${{ matrix.artifact }}
           path: dist/*
           if-no-files-found: error
           retention-days: 30
 
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built APKs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-apk'
+          merge-multiple: true
+          path: dist
+
+      - name: List release files
+        run: ls -l dist
+
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -134,18 +162,24 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
-            Medit の Android APK です。
+            Medit と MeditDAW の Android APK です。
 
-            - パッケージ: `com.medit.midi`
+            | アプリ | パッケージ | 内容 |
+            | --- | --- | --- |
+            | **Medit** | `com.medit.midi` | ピアノ専用MIDIエディタ（従来版） |
+            | **MeditDAW** | `com.medit.daw` | トラック機能・トラック毎の音源選択に対応したDAW版 |
+
             - 対応バージョン: Android 8.0 (API 26) 以上
             - 署名: リリース署名（v1 / v2 / v3）
+            - 2つのアプリは別パッケージなので、同じ端末に並べてインストールできます。
 
             インストール:
 
             ```bash
-            adb install -r ${{ steps.artifact.outputs.name }}
+            adb install -r Medit-*.apk
+            adb install -r MeditDAW-*.apk
             ```
 
             - v1.2.1 以前（デバッグ署名）からアップデートする場合は、一度旧アプリをアンインストールしてからインストールしてください。
-            - 「パッケージの解析中にエラーが発生しました」と表示される場合は、ダウンロードが完了しているか（ファイルサイズが約 23 MB）と Android 8.0 以上かを確認してください。
+            - 「パッケージの解析中にエラーが発生しました」と表示される場合は、ダウンロードが完了しているかと Android 8.0 以上かを確認してください。
             - SHA-256 は同名の `.sha256` ファイルにあります。

@@ -63,26 +63,6 @@ import kotlin.math.min
 // decoded sample size, which SoundFontLoader derives from the app heap.
 private const val MAX_SOUNDFONT_FILE_BYTES = 1L * 1024 * 1024 * 1024
 
-enum class HoverZone { EMPTY, NOTE_BODY, NOTE_START, NOTE_END }
-
-data class HoverInfo(
-    val xPx: Float,
-    val yPx: Float,
-    val pitch: Int,
-    val tick: Int,
-    val snappedTick: Int,
-    val barBeatLabel: String,
-    val zone: HoverZone,
-    val noteId: Long?,
-    val notePitch: Int?,
-    val noteStart: Int?,
-    val noteDuration: Int?,
-    val ghostStart: Int,
-    val ghostPitch: Int,
-    val ghostDurationTicks: Int,
-    val stylus: Boolean,
-)
-
 sealed interface AutosaveState {
     data object Idle : AutosaveState
     data object Saving : AutosaveState

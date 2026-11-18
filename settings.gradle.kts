@@ -15,3 +15,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Medit"
 include(":app")
+include(":shared")
+include(":daw")

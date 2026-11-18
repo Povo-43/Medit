@@ -1,20 +1,30 @@
-# Medit
+# Medit / MeditDAW
 
-Android タブレット向けの、ピアノ専用 MIDI エディタです。Kotlin + Jetpack Compose で構成し、
-ピアノロールだけはスタイラスホバーと細かいポインタ制御のため、独自の `View` + `Canvas` で描画・操作しています。
-WebView や Web アプリは使用していません。
+Android タブレット向けの、ピアノ専用 MIDI エディタ（Medit）と、
+トラック機能・トラック毎の音源選択に対応したDAW版（MeditDAW）です。
+Kotlin + Jetpack Compose で構成し、ピアノロールはスタイラスホバーと細かいポインタ制御のため、
+独自の `View` + `Canvas` で描画・操作しています。WebView や Web アプリは使用していません。
 
-- パッケージ: `com.medit.midi`
-- アプリ名: Medit
+リポジトリは 3 つの Gradle モジュールに分割されています。
+
+| モジュール | アプリ | パッケージ | 概要 |
+|---|---|---|---|
+| `:shared` | — | — | 共通コード（モデル、MIDI、音源、永続化、ピアノロールなど） |
+| `:app` | Medit | `com.medit.midi` | ピアノ専用 MIDI エディタ（従来版） |
+| `:daw` | MeditDAW | `com.medit.daw` | トラック機能・トラック毎の音源選択に対応したDAW版 |
+
+2 つのアプリは別パッケージなので、同じ端末に並べてインストールできます。
+
 - minSdk 26 / targetSdk 34
-- 内蔵音源: 同梱の `app/src/main/assets/piano.sf2`（自前生成・CC0）
-- 出力 APK: `app/build/outputs/apk/debug/app-debug.apk`（開発用） / `app/build/outputs/apk/release/app-release.apk`（配布用）
+- 内蔵音源: 同梱の `piano.sf2`（自前生成・CC0）
 
 ---
 
 ## ビルド
 
 前提: JDK 17 以上、Android SDK Platform 34 / Build-Tools 34。
+
+### Medit
 
 ```bash
 ./gradlew :app:assembleDebug
@@ -26,40 +36,100 @@ APK は `app/build/outputs/apk/debug/app-debug.apk` に生成されます。端�
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+### MeditDAW
+
+```bash
+./gradlew :daw:assembleDebug
+```
+
+APK は `daw/build/outputs/apk/debug/daw-debug.apk` に生成されます。
+
+```bash
+adb install -r daw/build/outputs/apk/debug/daw-debug.apk
+```
+
+### 両方を同時にビルド
+
+```bash
+./gradlew :app:assembleDebug :daw:assembleDebug
+```
+
 テスト:
 
 ```bash
-./gradlew :app:testDebugUnitTest
+./gradlew :shared:testDebugUnitTest :app:testDebugUnitTest :daw:testDebugUnitTest
 ```
 
 ユニットテストは MIDI のラウンドトリップ、ランニングステータス、テンポ・拍子の保持、
 META（著作権・キー・テキスト）の往復、スナップ／3連符、テンポ・拍子マップ、
-同梱 SoundFont のパースなど **43 件**を収録しています。
+同梱 SoundFont のパースなどを収録しています。
+
+Lint:
+
+```bash
+./gradlew :app:lintDebug :daw:lintDebug
+```
 
 ### GitHub Actions によるリリース
 
 `.github/workflows/android-release.yml` が、ユニットテスト・Lint・APK ビルド（`assembleRelease`）・
 APK 整合性検証（zipalign / apksigner / aapt2）を実行し、タグ push 時は GitHub Release に APK と SHA-256 を添付します。
 
+`app` と `daw` はマトリクスで並列ビルドされ、リリースジョブが両方の APK をダウンロードして 1 つの GitHub Release に添付します。
+
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-- `v*` タグ: テスト → Lint → `assembleRelease` → APK 検証 → GitHub Release 作成
+- `v*` タグ: テスト → Lint → `assembleRelease`（app / daw 並列）→ APK 検証 → GitHub Release 作成
 - 手動実行（Actions タブの **Build and Release APK**）: ビルドのみ行い、APK を Artifacts に保存
 - 署名: リリース用鍵（GitHub Secrets の `RELEASE_KEYSTORE_BASE64` 等）で v1 / v2 / v3 署名します。
   ローカルでリリースビルドする場合は `keystore/release.keystore`（Git 管理外）に鍵を置き、
   環境変数 `RELEASE_STORE_PASSWORD` / `RELEASE_KEY_ALIAS` / `RELEASE_KEY_PASSWORD` を設定してください
 
+リリース APK の出力先:
+
+- Medit: `app/build/outputs/apk/release/app-release.apk`
+- MeditDAW: `daw/build/outputs/apk/release/daw-release.apk`
+
 ### インストール時の注意
 
 - **v1.2.1 以前（デバッグ署名）からのアップデートは、一度旧アプリをアンインストールしてから**新しい APK をインストールしてください。
   署名鍵が異なるため、上書きインストールは署名競合で失敗します。
+- Medit と MeditDAW は別パッケージ（`com.medit.midi` / `com.medit.daw`）なので、
+  同じ端末に並べてインストールできます。
 - 「パッケージの解析中にエラーが発生しました」と出る場合は、次を確認してください:
-  1. ダウンロードしたファイルが完全か（GitHub Release の APK は約 18〜24 MB。`.sha256` で照合できます）
+  1. ダウンロードしたファイルが完全か（`.sha256` で照合できます）
   2. 端末が Android 8.0 (API 26) 以上か
   3. 拡張子が `.apk` のままか（SNS 経由だと別名・圧縮されることがあります）
+
+---
+
+## MeditDAW（DAW版）
+
+MeditDAW は Medit のピアノロール編集モデルを共有しつつ、トラック機能とトラック毎の音源選択を追加した DAW 版です。
+
+- パッケージ: `com.medit.daw`
+- アプリ名: MeditDAW
+- バージョン: 0.1.0 / versionCode 1
+- 出力 APK: `daw/build/outputs/apk/debug/daw-debug.apk`（開発用） / `daw/build/outputs/apk/release/daw-release.apk`（配布用）
+
+### 主な機能
+
+- **トラック管理**: 複数トラックの追加・複製・削除・名前変更・アクティブトラック切替
+- **トラック毎の音源選択**: 各トラックに SoundFont バンクとプリセット（プログラム番号）を個別に割り当て可能
+- **ミキサー**: トラック毎のボリューム（0〜200%）、ミュート、ソロ
+- **多トラック再生**: 全トラックを同一タイムラインで同時再生。共通のテンポマップ・拍子マップを使用
+- **音声書き出し**: 全トラックをミックスしたオフラインレンダリング（MP3 / AAC）
+- **外部 SoundFont のインポート**: `.sf2` ファイルをライブラリに登録し、トラックから選択可能
+- **MIDI 入出力**: `.mid` ファイルの読み込み・書き出し、MIDI キーボード入力
+
+### 音源ライブラリ
+
+同梱の "Medit Piano"（バンドル音源）に加え、ユーザーが外部 SF2 をインポートできます。
+インポートされた音源はアプリ専用領域にコピーされ、再起動後も選択が維持されます。
+ライブラリから音源を削除すると、参照しているトラックは自動的にバンドル音源に戻ります。
 
 ---
 
@@ -291,6 +361,16 @@ app/src/main/java/com/medit/midi/
 - **MIDI の未知イベントは `RawEvent` として保持**。ノートオン／オフだけを編集対象にし、
   書き出し時に再生成します。
 
+### モジュール分割
+
+コードは 3 つの Gradle モジュールに分割されており、Medit と MeditDAW で共通部分を共有します。
+
+- `:shared` — モデル（`Track`/`Project`/`Note`）、MIDI パーサ・ライタ、音源（`PianoSynth`/`SoundFontLoader`/`AudioExporter`）、永続化（`ProjectStore`/`ProjectRepository`）、MIDI 入力、ピアノロール描画・テーマ
+- `:app` (Medit) — `MainActivity`、`EditorViewModel`、`EditorScreen`、ダイアログ、リソース/マニフェスト。Medit のみの UI と編集ロジックを保持し、共通部分は `:shared` へ依存
+- `:daw` (MeditDAW) — `DawViewModel`、`DawAudioEngine`、`DawPlaybackEngine`、`InstrumentLibrary`、Compose UI、マニフェスト。トラック管理・多トラック再生・音源ライブラリを実装
+
+Medit 本体の動作は変更せず、`:app` は単一のグローバル `AudioEngine`/`PlaybackEngine` を使用し続けます。
+
 ---
 
 ## 内蔵 SoundFont
@@ -327,9 +407,10 @@ SF3 / Ogg 圧縮、モジュレータ、フィルタ、LFO は対象外です
 このリポジトリでは以下を確認済みです。
 
 ```text
-./gradlew :app:testDebugUnitTest   BUILD SUCCESSFUL  (43 tests, 0 failures)
-./gradlew :app:assembleDebug       BUILD SUCCESSFUL
-aapt2 dump badging                 パッケージ / minSdk 26 / targetSdk 34 を確認
+./gradlew :shared:testDebugUnitTest :app:testDebugUnitTest :daw:testDebugUnitTest
+                                   BUILD SUCCESSFUL  (48 tests, 0 failures)
+./gradlew :app:assembleDebug :daw:assembleDebug   BUILD SUCCESSFUL
+./gradlew :app:lintDebug :daw:lintDebug           BUILD SUCCESSFUL
 ```
 
 テスト内容:
@@ -343,6 +424,8 @@ aapt2 dump badging                 パッケージ / minSdk 26 / targetSdk 34 �
   オフラインシンセのユーザー音量ゲイン
 - 音声書き出し: SoundFont でのオフライン PCM レンダリング（無音でないこと・
   空プロジェクトで空になること）、MP3 のフレーム同期確認
+- DAW: 全プリセット SoundFont 読み込み・`withPreset` によるプリセット切替、
+  Track のミキサー欄（soundId / presetIndex / volume / muted / solo）の JSON ラウンドトリップ
 
 **未検証**: この開発環境にはエミュレータ / KVM / adb 接続端末がないため、
 実機でのスタイラスホバー、音声出力、SAF の画面遷移は実行確認できていません。
