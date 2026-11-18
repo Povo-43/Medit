@@ -100,20 +100,20 @@ class DawAudioEngine(private val context: Context) {
         }
     }
 
-    fun noteOn(track: Int, pitch: Int, velocity: Int, channel: Int = 0) {
-        outputs[track]?.synth?.noteOn(pitch, velocity, channel)
+    fun noteOn(track: Int, pitch: Int, velocity: Int, channel: Int = 0, sampleOffset: Int = 0) {
+        outputs[track]?.synth?.noteOn(pitch, velocity, channel, sampleOffset)
     }
 
-    fun noteOff(track: Int, pitch: Int, channel: Int = 0) {
-        outputs[track]?.synth?.noteOff(pitch, channel)
+    fun noteOff(track: Int, pitch: Int, channel: Int = 0, sampleOffset: Int = 0) {
+        outputs[track]?.synth?.noteOff(pitch, channel, sampleOffset)
     }
 
-    fun setSustain(track: Int, on: Boolean) {
-        outputs[track]?.synth?.setSustain(on)
+    fun setSustain(track: Int, on: Boolean, sampleOffset: Int = 0) {
+        outputs[track]?.synth?.setSustain(on, sampleOffset)
     }
 
-    fun allNotesOff(fast: Boolean = false) {
-        outputs.values.forEach { it.synth.allNotesOff(fast) }
+    fun allNotesOff(fast: Boolean = false, sampleOffset: Int = 0) {
+        outputs.values.forEach { it.synth.allNotesOff(fast, sampleOffset) }
     }
 
     fun setGlobalVolume(value: Float) {
@@ -143,10 +143,12 @@ class DawAudioEngine(private val context: Context) {
 
     @Synchronized
     fun shutdown() {
-        outputs.values.forEach {
-            it.synth.allNotesOff(fast = true)
-            it.synth.close()
-        }
+        // First tell all synths to stop (AapSynth sets running=false which
+        // causes the render thread to exit its loop).
+        outputs.values.forEach { it.synth.allNotesOff(fast = true) }
+        // Then close each synth (this joins the render thread and releases
+        // native resources only after the thread has stopped).
+        outputs.values.forEach { it.synth.close() }
         outputs = emptyMap()
         previews.clear()
     }
