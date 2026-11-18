@@ -37,9 +37,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.androidaudioplugin.PluginInformation
+import org.androidaudioplugin.hosting.AudioPluginHostHelper
+import org.androidaudioplugin.hosting.AudioPluginInstance
+import org.androidaudioplugin.hosting.AudioPluginServiceConnector
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -77,7 +82,8 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application
     private val library = InstrumentLibrary(application)
-    private val audio = DawAudioEngine()
+    private val aapLibrary = AapInstrumentLibrary(application)
+    private val audio = DawAudioEngine(application)
     private val playback = DawPlaybackEngine(audio)
 
     private val _project = MutableStateFlow<Project?>(null)
@@ -96,6 +102,7 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
     private val _audioReady = MutableStateFlow(false)
     private val _audioLoading = MutableStateFlow(false)
     private val _instruments = MutableStateFlow<List<InstrumentLibrary.Entry>>(emptyList())
+    private val _aapEntries = MutableStateFlow<List<AapEntry>>(emptyList())
     private val _projectList = MutableStateFlow<List<ProjectSummary>>(emptyList())
     private val _projectsLoading = MutableStateFlow(false)
     private val _projectBrowserVisible = MutableStateFlow(false)
@@ -103,6 +110,8 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
     private val _inspectorNoteId = MutableStateFlow<Long?>(null)
     private val _masterVolume = MutableStateFlow(1f)
     private val messages = Channel<String>(Channel.BUFFERED)
+
+    private val aapPluginInstances = HashMap<Int, Pair<AudioPluginInstance, PluginInformation>>()
 
     val project: StateFlow<Project?> = _project.asStateFlow()
     val selection: StateFlow<Set<Long>> = _selection.asStateFlow()
@@ -118,6 +127,8 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
     val audioReady: StateFlow<Boolean> = _audioReady.asStateFlow()
     val audioLoading: StateFlow<Boolean> = _audioLoading.asStateFlow()
     val instruments: StateFlow<List<InstrumentLibrary.Entry>> = _instruments.asStateFlow()
+    val aapEntries: StateFlow<List<AapEntry>> = _aapEntries.asStateFlow()
+    val aapAvailable: kotlinx.coroutines.flow.Flow<Boolean> = _aapEntries.asStateFlow().map { entries -> entries.isNotEmpty() }
     val projects: StateFlow<List<ProjectSummary>> = _projectList.asStateFlow()
     val projectsLoading: StateFlow<Boolean> = _projectsLoading.asStateFlow()
     val projectBrowserVisible: StateFlow<Boolean> = _projectBrowserVisible.asStateFlow()
@@ -150,10 +161,16 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             _instruments.value = withContext(Dispatchers.IO) { library.entries() }
+            aapLibrary.refresh()
+            _aapEntries.value = aapLibrary.entries.value
             restoreWorkspace()
         }
         viewModelScope.launch {
             combineProjectChanges()
+        }
+        // Keep AAP entries in sync
+        viewModelScope.launch {
+            aapLibrary.entries.collect { _aapEntries.value = it }
         }
     }
 
@@ -526,10 +543,52 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
         playback.pause()
         pushUndo()
         val tracks = p.tracks.toMutableList()
-        tracks[index] = track.copy(soundId = soundId, presetIndex = presetIndex)
+        // Switching to a SoundFont clears any AAP plugin assignment
+        val newTrack = track.copy(soundId = soundId, presetIndex = presetIndex, pluginId = null, pluginParams = null)
+        tracks[index] = newTrack
         updateProject(p.copy(tracks = tracks))
         syncAudio()
         post("${track.name} の音源を ${library.displayName(soundId)} にしました")
+    }
+
+    /**
+     * Sets an AAP plugin as the sound source for [index]. Passing null clears
+     * the plugin and falls back to the SoundFont.
+     */
+    fun setTrackPlugin(index: Int, pluginId: String?) {
+        val p = _project.value ?: return
+        val track = p.tracks.getOrNull(index) ?: return
+        if (track.pluginId == pluginId) return
+        playback.pause()
+        pushUndo()
+        val tracks = p.tracks.toMutableList()
+        val newTrack = track.copy(pluginId = pluginId, pluginParams = null)
+        tracks[index] = newTrack
+        updateProject(p.copy(tracks = tracks))
+        syncAudio()
+        val name = pluginId?.let { aapLibrary.find(it)?.displayName ?: it } ?: "SoundFont"
+        post("${track.name} の音源を $name にしました")
+    }
+
+    /** Sets a parameter on the AAP plugin of track [index]. */
+    fun setTrackPluginParameter(index: Int, paramId: Int, value: Float) {
+        val p = _project.value ?: return
+        val track = p.tracks.getOrNull(index) ?: return
+        if (!track.isAapPlugin) return
+        val jsonObj = track.pluginParams?.let { org.json.JSONObject(it) } ?: org.json.JSONObject()
+        jsonObj.put(paramId.toString(), value)
+        val json = jsonObj.toString()
+        val tracks = p.tracks.toMutableList()
+        tracks[index] = track.copy(pluginParams = json)
+        updateProject(p.copy(tracks = tracks))
+        if (autosaveEnabled) scheduleAutosave()
+    }
+
+    fun refreshAapPlugins() {
+        viewModelScope.launch {
+            aapLibrary.refresh()
+            _aapEntries.value = aapLibrary.entries.value
+        }
     }
 
     fun setMasterVolume(value: Float) {
@@ -608,14 +667,57 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
                     cache.getOrPut(track.soundId) { library.font(track.soundId) }
                 }
             }
-            audio.sync(p, fonts.withIndex().associate { it.index to it.value })
-            _audioReady.value = fonts.any { it != null }
+            val fontMap = fonts.withIndex().associate { it.index to it.value }
+
+            // Load AAP plugin instances for tracks that use them
+            val aapMap = HashMap<Int, Pair<AudioPluginInstance, PluginInformation>>()
+            for ((index, track) in p.tracks.withIndex()) {
+                if (track.isAapPlugin) {
+                    val existing = aapPluginInstances[index]
+                    if (existing != null && existing.second.pluginId == track.pluginId) {
+                        aapMap[index] = existing
+                    } else {
+                        // Unload old instance if plugin changed
+                        existing?.first?.destroy()
+                        val newInstance = loadAapPlugin(track)
+                        if (newInstance != null) {
+                            aapPluginInstances[index] = newInstance
+                            aapMap[index] = newInstance
+                        }
+                    }
+                } else {
+                    // Clean up any AAP instance for non-AAP tracks
+                    aapPluginInstances[index]?.first?.destroy()
+                    aapPluginInstances.remove(index)
+                }
+            }
+
+            audio.sync(p, fontMap, aapMap)
+            _audioReady.value = fontMap.any { it != null } || aapMap.isNotEmpty()
             _audioLoading.value = false
-            val missing = p.tracks.filterIndexed { i, _ -> fonts.getOrNull(i) == null }
+            val missingFonts = p.tracks.filterIndexed { i, _ -> !p.tracks[i].isAapPlugin && fontMap.get(i) == null }
+            val missingAaps = p.tracks.filterIndexed { i, _ -> p.tracks[i].isAapPlugin && aapMap.get(i) == null }
+            val missing = missingFonts + missingAaps
             if (missing.isNotEmpty()) {
                 post("音源を読み込めないトラックがあります: ${missing.joinToString { it.name }}")
             }
         }
+    }
+
+    /**
+     * Loads and binds an AAP plugin instance for [track]. Returns the plugin
+     * instance and its [PluginInformation], or null if loading fails.
+     *
+     * Note: The public AAP API does not currently expose plugin instance
+     * creation for audio processing. This method returns null until the
+     * internal host API is available. Plugin discovery and UI launching
+     * still work via [AudioPluginHostHelper].
+     */
+    private suspend fun loadAapPlugin(track: Track): Pair<AudioPluginInstance, PluginInformation>? {
+        // AAP plugin audio processing requires internal host APIs that are
+        // not exposed in the public library. Return null so the track stays
+        // silent until the API is available.
+        return null
     }
 
     fun play() {
@@ -932,6 +1034,12 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
         previewJobs.values.forEach { it.cancel() }
         playback.shutdown()
         audio.shutdown()
+        // Destroy all AAP plugin instances
+        aapPluginInstances.values.forEach { (instance, _) ->
+            instance.destroy()
+        }
+        aapPluginInstances.clear()
+        aapLibrary.shutdown()
         super.onCleared()
     }
 

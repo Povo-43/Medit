@@ -55,6 +55,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        prefab = true
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -78,6 +79,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // AndroidAudioPlugin (AAP) host library for LV2 plugin hosting
+    implementation("org.androidaudioplugin:androidaudioplugin:0.9.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 

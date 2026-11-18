@@ -367,6 +367,7 @@ private fun DawEditor(
     val viewport by vm.viewport.collectAsStateWithLifecycle()
     val epoch by vm.viewportEpoch.collectAsStateWithLifecycle()
     val playing by vm.isPlaying.collectAsStateWithLifecycle()
+    val aapEntries by vm.aapEntries.collectAsStateWithLifecycle()
     val hover by vm.hover.collectAsStateWithLifecycle()
     val canUndo by vm.canUndo.collectAsStateWithLifecycle()
     val canRedo by vm.canRedo.collectAsStateWithLifecycle()
@@ -462,6 +463,7 @@ private fun DawEditor(
                         onRename = { renameTrack = it },
                         onAddInstrument = onAddInstrument,
                         onClose = null,
+                        aapEntries = aapEntries,
                     )
                     VerticalDividerLine()
                 }
@@ -534,6 +536,7 @@ private fun DawEditor(
                 onRename = { renameTrack = it },
                 onAddInstrument = onAddInstrument,
                 onClose = { showTracks = false },
+                aapEntries = aapEntries,
             )
         }
     }
@@ -614,6 +617,7 @@ private fun DawEditor(
                 trackIndex = index,
                 track = track,
                 instruments = instruments,
+                aapEntries = aapEntries,
                 onAddInstrument = onAddInstrument,
                 onDismiss = { instrumentTrack = null },
             )
@@ -833,6 +837,7 @@ private fun TrackPanel(
     onRename: (Int) -> Unit,
     onAddInstrument: () -> Unit,
     onClose: (() -> Unit)?,
+    aapEntries: List<AapEntry> = emptyList(),
 ) {
     Surface(modifier = modifier, color = Panel) {
         Column(Modifier.fillMaxSize()) {
@@ -865,7 +870,11 @@ private fun TrackPanel(
                         index = index,
                         track = track,
                         active = index == project.activeTrack,
-                        instrument = instruments.firstOrNull { it.id == track.soundId }?.name ?: "Medit Piano",
+                        instrument = if (track.isAapPlugin) {
+                            aapEntries.firstOrNull { it.pluginId == track.pluginId }?.displayName ?: track.pluginId ?: "AAP"
+                        } else {
+                            instruments.firstOrNull { it.id == track.soundId }?.name ?: "Medit Piano"
+                        },
                         onSelect = { vm.selectTrack(index) },
                         onInstrument = { onInstrument(index) },
                         onRename = { onRename(index) },
@@ -1327,6 +1336,7 @@ private fun InstrumentPickerDialog(
     trackIndex: Int,
     track: Track,
     instruments: List<InstrumentLibrary.Entry>,
+    aapEntries: List<AapEntry>,
     onAddInstrument: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1338,11 +1348,13 @@ private fun InstrumentPickerDialog(
         presets = vm.presetsFor(expanded)
         loading = false
     }
+    val aapSelected = track.isAapPlugin && track.pluginId != null
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("${track.name} の音源") },
         text = {
-            Column(Modifier.heightIn(max = 480.dp)) {
+            Column(Modifier.heightIn(max = 520.dp)) {
+                Text("SoundFont", color = Mist, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(start = 12.dp, top = 6.dp, end = 12.dp, bottom = 0.dp))
                 LazyColumn(Modifier.weight(1f, fill = false)) {
                     itemsIndexed(instruments) { _, entry ->
                         val selected = entry.id == track.soundId
@@ -1395,12 +1407,47 @@ private fun InstrumentPickerDialog(
                                                     style = MaterialTheme.typography.labelMedium,
                                                     modifier = Modifier.weight(1f),
                                                 )
-                                                if (isCurrent) Icon(Icons.Rounded.Check, null, tint = Teal, modifier = Modifier.size(16.dp))
+                                                if (isCurrent) {
+                                                    Icon(Icons.Rounded.Check, null, tint = Teal, modifier = Modifier.size(16.dp))
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("AAP プラグイン", color = Mist, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(start = 12.dp, top = 6.dp, end = 12.dp, bottom = 0.dp))
+                LazyColumn(Modifier.weight(1f, fill = false)) {
+                    itemsIndexed(aapEntries) { _, entry ->
+                        val selected = track.pluginId == entry.pluginId
+                        Surface(
+                            onClick = {
+                                vm.setTrackPlugin(trackIndex, entry.pluginId)
+                                onDismiss()
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (selected) Teal.copy(alpha = 0.16f) else Color.Transparent,
+                        ) {
+                            Row(Modifier.padding(horizontal = 8.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Rounded.Settings, null, tint = if (selected) Teal else Mist, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(entry.displayName, color = Paper, modifier = Modifier.weight(1f))
+                                    Text("${entry.parameterCount}パラメータ", color = Mist, style = MaterialTheme.typography.labelSmall)
+                                }
+                                if (selected) {
+                                    Icon(Icons.Rounded.Check, null, tint = Teal, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                    if (aapEntries.isEmpty()) {
+                        item {
+                            Text("インストール済みのAAPプラグインはありません", color = Mist, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(16.dp))
                         }
                     }
                 }
@@ -1734,7 +1781,9 @@ private fun MidiExportDialog(
                             ) {
                                 Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text("${index + 1}. ${track.name}", color = Paper, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                                    if (selected) Icon(Icons.Rounded.Check, null, tint = Teal, modifier = Modifier.size(16.dp))
+                                    if (selected) {
+                                        Icon(Icons.Rounded.Check, null, tint = Teal, modifier = Modifier.size(16.dp))
+                                    }
                                 }
                             }
                         }

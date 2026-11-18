@@ -179,6 +179,8 @@ object ProjectStore {
             track.put("volume", t.volume.toDouble())
             track.put("muted", t.muted)
             track.put("solo", t.solo)
+            t.pluginId?.let { track.put("pluginId", it) }
+            t.pluginParams?.let { track.put("pluginParams", it) }
             val notes = JSONArray()
             t.notes.forEach { n ->
                 val nj = JSONObject()
@@ -316,6 +318,8 @@ object ProjectStore {
                     ?.toFloat()?.coerceIn(0f, 2f) ?: 1f,
                 muted = tj.optBoolean("muted", false),
                 solo = tj.optBoolean("solo", false),
+                pluginId = tj.optString("pluginId", null),
+                pluginParams = tj.optString("pluginParams", null),
             )
         }
         if (tracks.isEmpty()) {
