@@ -18,11 +18,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -65,6 +68,15 @@ import androidx.compose.material.icons.rounded.VolumeDown
 import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.ZoomIn
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp as AutoMirroredVolumeUp
+import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.HighlightAlt
+import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.Straighten
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.FileCopy
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.ZoomOut
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -476,8 +488,7 @@ private fun DawEditor(
                         project = project,
                         prefs = prefs,
                         selectionSize = selection.size,
-                        activeInstrument = vm.instrumentName(project.track.soundId),
-                        onInstrument = { instrumentTrack = project.activeTrack },
+                        onSettings = { /* 設定ダイアログは未実装（トラックパネル等で代替） */ },
                         onVelocity = { showVelocity = true },
                         onLength = { showLength = true },
                         onInputVelocity = { showInputVelocity = true },
@@ -490,6 +501,18 @@ private fun DawEditor(
                             rollView.zoomVertical(0.9f)
                         },
                         onFit = { rollView.fitToSong() },
+                        onScrollBars = { delta ->
+                            val vp = viewport
+                            rollView.syncState(
+                                project = project,
+                                prefs = prefs,
+                                selection = selection,
+                                viewport = viewport.copy(startTick = vp.startTick + delta * project.ppq * 4),
+                                epoch = epoch,
+                                playing = playing,
+                            )
+                        },
+                        onInspector = { /* 数値編集ダイアログは未実装 */ },
                     )
                 }
             }
@@ -967,101 +990,330 @@ private fun DawDock(
     project: Project,
     prefs: EditorPrefs,
     selectionSize: Int,
-    activeInstrument: String,
-    onInstrument: () -> Unit,
+    onSettings: () -> Unit,
     onVelocity: () -> Unit,
     onLength: () -> Unit,
     onInputVelocity: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onFit: () -> Unit,
+    onScrollBars: (Int) -> Unit,
+    onInspector: () -> Unit,
 ) {
-    Surface(color = Panel, tonalElevation = 3.dp) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                DockIcon(Icons.Rounded.GridOn, prefs.grid.label, on = prefs.grid != GridUnit.OFF, onClick = vm::cycleGrid)
-                DockIcon(
-                    if (prefs.snapEnabled) Icons.Rounded.GridOn else Icons.Rounded.GridOff,
-                    "スナップ",
-                    on = prefs.snapEnabled,
-                    onClick = { vm.setSnapEnabled(!prefs.snapEnabled) },
+    val selectionCount = selectionSize
+
+    @Composable
+    fun dockBtn(
+        icon: ImageVector,
+        label: String,
+        active: Boolean = false,
+        enabled: Boolean = true,
+        onClick: () -> Unit,
+    ) {
+        val tint = when {
+            !enabled -> Mist.copy(alpha = 0.3f)
+            active -> MaterialTheme.colorScheme.primary
+            else -> Paper
+        }
+        Column(
+            modifier = Modifier
+                .width(64.dp)
+                .height(56.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.13f)
+                    else Color.Transparent
                 )
-                DockText(prefs.inputDuration.label, "入力長", onClick = {
-                    val values = GridUnit.entries.filter { it != GridUnit.OFF }
-                    val idx = values.indexOf(prefs.inputDuration)
-                    vm.setInputDuration(values[(idx + 1) % values.size])
-                })
-                DockText("V${prefs.inputVelocity}", "入力ベロシティ", onClick = onInputVelocity)
-                DockIcon(Icons.Rounded.GraphicEq, "ベロシティ", on = prefs.velocityEditor, onClick = vm::toggleVelocityEditor)
-                DockIcon(Icons.Rounded.SelectAll, "範囲選択", on = prefs.multiSelectMode, onClick = vm::toggleMultiSelectMode)
-                Spacer(Modifier.width(4.dp))
-                DockIcon(Icons.Rounded.ZoomOut, "縮小", on = false, onClick = onZoomOut)
-                DockIcon(Icons.Rounded.ZoomIn, "拡大", on = false, onClick = onZoomIn)
-                DockText("Fit", "全体表示", onClick = onFit)
-                Spacer(Modifier.width(4.dp))
-                DockIcon(Icons.Rounded.ContentCopy, "コピー", on = false, onClick = vm::copySelection)
-                DockIcon(Icons.Rounded.ContentCut, "切り取り", on = false, onClick = vm::cutSelection)
-                DockIcon(Icons.Rounded.ContentPaste, "貼り付け", on = false, onClick = vm::pasteAtPlayhead)
-                DockIcon(Icons.Rounded.Delete, "削除", on = false, onClick = vm::deleteSelection)
-                DockIcon(Icons.Rounded.MusicNote, "クオンタイズ", on = false, onClick = vm::quantizeSelection)
-                Spacer(Modifier.width(4.dp))
-                Surface(
-                    onClick = onInstrument,
-                    shape = RoundedCornerShape(8.dp),
-                    color = PanelRaised,
-                    contentColor = Paper,
+                .clickable(enabled = enabled, onClick = onClick)
+                .padding(vertical = 5.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(21.dp))
+            Spacer(Modifier.height(3.dp))
+            Text(
+                label,
+                color = tint,
+                fontSize = 9.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+
+    // 未選択時: 入力コントロール＋常時アイテム
+    val unselectedActions: MutableList<@Composable () -> Unit> = mutableListOf()
+    unselectedActions += { dockBtn(
+        icon = if (prefs.grid == GridUnit.OFF) Icons.Rounded.GridOff else Icons.Rounded.GridOn,
+        label = "グリッド ${prefs.grid.label}",
+        active = prefs.grid != GridUnit.OFF,
+        onClick = { vm.cycleGrid() },
+    ) }
+    unselectedActions += { dockBtn(
+        icon = Icons.Rounded.Straighten,
+        label = "長さ ${prefs.inputDuration.label}",
+        onClick = {
+            val values = GridUnit.entries.filter { it != GridUnit.OFF }
+            val idx = values.indexOf(prefs.inputDuration)
+            vm.setInputDuration(values[(idx + 1) % values.size])
+        },
+    ) }
+    unselectedActions += { dockBtn(
+        icon = if (prefs.snapEnabled) Icons.Rounded.Check else Icons.Rounded.Close,
+        label = "スナップ ${if (prefs.snapEnabled) "ON" else "OFF"}",
+        active = prefs.snapEnabled,
+        onClick = { vm.setSnapEnabled(!prefs.snapEnabled) },
+    ) }
+    unselectedActions += { dockBtn(
+        icon = Icons.Rounded.VolumeUp,
+        label = "入力 v${prefs.inputVelocity}",
+        onClick = onInputVelocity,
+    ) }
+    unselectedActions += { dockBtn(
+        icon = Icons.Rounded.BarChart,
+        label = "ベロシティ編集",
+        active = prefs.velocityEditor,
+        onClick = { vm.toggleVelocityEditor() },
+    ) }
+    unselectedActions += { dockBtn(
+        icon = Icons.Rounded.HighlightAlt,
+        label = if (prefs.multiSelectMode) "複数選択 ON" else "複数選択",
+        active = prefs.multiSelectMode,
+        onClick = { vm.toggleMultiSelectMode() },
+    ) }
+    unselectedActions += { dockBtn(
+        icon = Icons.Rounded.AutoFixHigh,
+        label = "全クオンタイズ",
+        enabled = project.notes.isNotEmpty(),
+        onClick = { vm.quantizeAll() },
+    ) }
+    unselectedActions += { dockBtn(
+        icon = Icons.Rounded.SelectAll,
+        label = "全選択",
+        enabled = project.notes.isNotEmpty(),
+        onClick = { vm.selectAll() },
+    ) }
+    unselectedActions += { dockBtn(
+        icon = Icons.Rounded.ContentPaste,
+        label = "貼り付け",
+        onClick = { vm.pasteAtPlayhead() },
+    ) }
+    // 選択時: 上段に重なるノート編集メニュー
+    val selectionActions: MutableList<@Composable () -> Unit> = mutableListOf()
+    if (selectionCount > 0) {
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.Close,
+            label = "選択解除",
+            onClick = { vm.clearSelection() },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.Straighten,
+            label = "長さ",
+            onClick = onLength,
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.BarChart,
+            label = "ベロシティ編集",
+            active = prefs.velocityEditor,
+            onClick = { vm.toggleVelocityEditor() },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.GraphicEq,
+            label = "v を揃える",
+            onClick = onVelocity,
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.HighlightAlt,
+            label = if (prefs.multiSelectMode) "複数選択 ON" else "複数選択",
+            active = prefs.multiSelectMode,
+            onClick = { vm.toggleMultiSelectMode() },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.ArrowDownward,
+            label = "−12",
+            onClick = { vm.transposeSelection(-12) },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.ArrowDownward,
+            label = "−1",
+            onClick = { vm.transposeSelection(-1) },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.ArrowUpward,
+            label = "+1",
+            onClick = { vm.transposeSelection(1) },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.ArrowUpward,
+            label = "+12",
+            onClick = { vm.transposeSelection(12) },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.FileCopy,
+            label = "複製",
+            onClick = { vm.duplicateSelection() },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.ContentCopy,
+            label = "コピー",
+            onClick = { vm.copySelection() },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.ContentCut,
+            label = "カット",
+            onClick = { vm.cutSelection() },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.ContentPaste,
+            label = "貼り付け",
+            onClick = { vm.pasteAtPlayhead() },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.Delete,
+            label = "削除",
+            onClick = { vm.deleteSelection() },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.AutoFixHigh,
+            label = "クオンタイズ",
+            onClick = { vm.quantizeSelection() },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.Loop,
+            label = "ループ範囲",
+            onClick = { /* rollView.setLoopRange from selection handled by roll host */ },
+        ) }
+        selectionActions += { dockBtn(
+            icon = Icons.Rounded.SelectAll,
+            label = "全選択",
+            onClick = { vm.selectAll() },
+        ) }
+        if (selectionCount == 1) {
+            selectionActions += { dockBtn(
+                icon = Icons.Rounded.Edit,
+                label = "数値編集",
+                onClick = onInspector,
+            ) }
+        }
+    }
+    // 常時: 下段
+    val alwaysActions: MutableList<@Composable () -> Unit> = mutableListOf()
+    alwaysActions += { dockBtn(
+        icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+        label = "前の小節",
+        onClick = { onScrollBars(-1) },
+    ) }
+    alwaysActions += { dockBtn(
+        icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+        label = "次の小節",
+        onClick = { onScrollBars(1) },
+    ) }
+    alwaysActions += { dockBtn(
+        icon = Icons.Rounded.ZoomOut,
+        label = "縮小",
+        onClick = onZoomOut,
+    ) }
+    alwaysActions += { dockBtn(
+        icon = Icons.Rounded.ZoomIn,
+        label = "拡大",
+        onClick = onZoomIn,
+    ) }
+    alwaysActions += { dockBtn(
+        icon = Icons.Rounded.Tune,
+        label = "全体表示",
+        onClick = onFit,
+    ) }
+    alwaysActions += { dockBtn(
+        icon = Icons.Rounded.Loop,
+        label = "ループ ${if (project.loopEnabled) "ON" else "OFF"}",
+        active = project.loopEnabled,
+        onClick = { vm.toggleLoop() },
+    ) }
+    alwaysActions += { dockBtn(
+        icon = Icons.Rounded.Settings,
+        label = "設定",
+        onClick = onSettings,
+    ) }
+
+    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
+        Column {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant)
+            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Rounded.Tune,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = when {
+                        prefs.multiSelectMode && selectionCount == 0 ->
+                            "複数選択 ON ・ ドラッグで範囲選択 / ノートをタップで追加"
+                        prefs.multiSelectMode ->
+                            "複数選択 ON ・ $selectionCount / ${project.notes.size} ノートを選択"
+                        selectionCount == 0 ->
+                            "入力 ${prefs.inputDuration.label} ・ グリッド ${prefs.grid.label} ・ スナップ ${if (prefs.snapEnabled) "ON" else "OFF"}"
+                        else ->
+                            "$selectionCount / ${project.notes.size} ノートを選択"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (selectionCount == 0) Mist else MaterialTheme.colorScheme.secondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    Icons.Rounded.MusicNote,
+                    contentDescription = null,
+                    tint = Mist.copy(alpha = 0.7f),
+                    modifier = Modifier.size(11.dp),
+                )
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    "${project.notes.size} notes",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Mist.copy(alpha = 0.7f),
+                )
+            }
+            if (selectionCount > 0) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Row(Modifier.padding(horizontal = 9.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Piano, null, tint = Teal, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text(activeInstrument, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
+                    items(selectionActions) { action ->
+                        action()
                     }
                 }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .height(1.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
+                )
             }
-            if (selectionSize > 0) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text("$selectionSize 個選択", color = Teal, style = MaterialTheme.typography.labelMedium)
-                    DockText("ベロシティ", "選択ベロシティ", onClick = onVelocity)
-                    DockText("長さ", "選択ノートの長さ", onClick = onLength)
-                    DockText("+12", "オクターブ上", onClick = { vm.transposeSelection(12) })
-                    DockText("-12", "オクターブ下", onClick = { vm.transposeSelection(-12) })
-                    DockText("複製", "複製", onClick = vm::duplicateSelection)
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                items(unselectedActions + alwaysActions) { action ->
+                    action()
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun DockIcon(icon: ImageVector, label: String, on: Boolean, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = if (on) Teal.copy(alpha = 0.18f) else Color.Transparent,
-        contentColor = if (on) Teal else Paper,
-    ) {
-        Icon(icon, label, modifier = Modifier.padding(7.dp).size(19.dp))
-    }
-}
-
-@Composable
-private fun DockText(label: String, description: String, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = PanelRaised,
-        contentColor = Paper,
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp))
-        description.hashCode()
     }
 }
 
