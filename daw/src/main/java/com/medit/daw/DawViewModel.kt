@@ -42,9 +42,11 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.androidaudioplugin.PluginInformation
+import org.androidaudioplugin.PluginServiceInformation
 import org.androidaudioplugin.hosting.AudioPluginHostHelper
 import org.androidaudioplugin.hosting.AudioPluginInstance
 import org.androidaudioplugin.hosting.AudioPluginServiceConnector
+import org.androidaudioplugin.hosting.NativePluginClient
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -111,7 +113,14 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
     private val _masterVolume = MutableStateFlow(1f)
     private val messages = Channel<String>(Channel.BUFFERED)
 
-    private val aapPluginInstances = HashMap<Int, Pair<AudioPluginInstance, PluginInformation>>()
+    // Data class to hold AAP plugin instance, its info, and the connector for lifecycle management
+private data class AapPluginInstance(
+    val plugin: AudioPluginInstance,
+    val info: PluginInformation,
+    val connector: AudioPluginServiceConnector
+)
+
+private val aapPluginInstances = HashMap<Int, AapPluginInstance>()
 
     val project: StateFlow<Project?> = _project.asStateFlow()
     val selection: StateFlow<Set<Long>> = _selection.asStateFlow()
@@ -599,6 +608,8 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
         if (autosaveEnabled) scheduleAutosave()
     }
 
+    fun currentMasterVolume(): Float = _masterVolume.value
+
     fun refreshInstruments() {
         viewModelScope.launch {
             _instruments.value = withContext(Dispatchers.IO) { library.entries() }
@@ -670,24 +681,26 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
             val fontMap = fonts.withIndex().associate { it.index to it.value }
 
             // Load AAP plugin instances for tracks that use them
-            val aapMap = HashMap<Int, Pair<AudioPluginInstance, PluginInformation>>()
+            val aapMap = HashMap<Int, Triple<AudioPluginInstance, PluginInformation, AudioPluginServiceConnector>>()
             for ((index, track) in p.tracks.withIndex()) {
                 if (track.isAapPlugin) {
                     val existing = aapPluginInstances[index]
-                    if (existing != null && existing.second.pluginId == track.pluginId) {
-                        aapMap[index] = existing
+                    if (existing != null && existing.info.pluginId == track.pluginId) {
+                        aapMap[index] = Triple(existing.plugin, existing.info, existing.connector)
                     } else {
                         // Unload old instance if plugin changed
-                        existing?.first?.destroy()
+                        existing?.plugin?.destroy()
+                        existing?.connector?.close()
                         val newInstance = loadAapPlugin(track)
                         if (newInstance != null) {
                             aapPluginInstances[index] = newInstance
-                            aapMap[index] = newInstance
+                            aapMap[index] = Triple(newInstance.plugin, newInstance.info, newInstance.connector)
                         }
                     }
                 } else {
                     // Clean up any AAP instance for non-AAP tracks
-                    aapPluginInstances[index]?.first?.destroy()
+                    aapPluginInstances[index]?.plugin?.destroy()
+                    aapPluginInstances[index]?.connector?.close()
                     aapPluginInstances.remove(index)
                 }
             }
@@ -706,18 +719,74 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Loads and binds an AAP plugin instance for [track]. Returns the plugin
-     * instance and its [PluginInformation], or null if loading fails.
-     *
-     * Note: The public AAP API does not currently expose plugin instance
-     * creation for audio processing. This method returns null until the
-     * internal host API is available. Plugin discovery and UI launching
-     * still work via [AudioPluginHostHelper].
+     * instance, its [PluginInformation], and the [AudioPluginServiceConnector] for lifecycle management.
      */
-    private suspend fun loadAapPlugin(track: Track): Pair<AudioPluginInstance, PluginInformation>? {
-        // AAP plugin audio processing requires internal host APIs that are
-        // not exposed in the public library. Return null so the track stays
-        // silent until the API is available.
-        return null
+    private suspend fun loadAapPlugin(track: Track): AapPluginInstance? {
+        val pluginId = track.pluginId ?: return null
+
+        // Query the plugin service information for the track's plugin ID
+        val serviceInfo = try {
+            AudioPluginHostHelper.queryAudioPluginService(app, pluginId)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return null
+        }
+        if (serviceInfo == null) return null
+
+        // Bind to the plugin service and ensure the native binder is connected
+        val connector = AudioPluginServiceConnector(app)
+        try {
+            AudioPluginHostHelper.ensureBinderConnected(serviceInfo, connector)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            connector.close()
+            return null
+        }
+
+        // Create a NativePluginClient from the connection
+        val connectionId = connector.serviceConnectionId
+        val nativePluginClient = NativePluginClient.Companion.createFromConnection(connectionId)
+
+        // Create the plugin instance from the existing connection
+        // The native method expects the plugin index within the service, not the string pluginId
+        val pluginIndex = serviceInfo.plugins.indexOfFirst { it.pluginId == pluginId }
+        if (pluginIndex < 0) return null
+        val nativeRemotePluginInstance = try {
+            nativePluginClient.createInstanceFromExistingConnection(pluginIndex, serviceInfo.packageName)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            nativePluginClient.dispose()
+            connector.close()
+            return null
+        }
+
+        // Wrap the native instance in AudioPluginInstance using the proper factory method
+        val pluginInfo: PluginInformation = serviceInfo.plugins.firstOrNull { it.pluginId == pluginId } ?: serviceInfo.plugins.first()
+        val audioPluginInstance = AudioPluginInstance.Companion.create(
+            nativePluginClient,
+            { it.destroy() },
+            pluginInfo,
+            0
+        )
+
+        // Prepare and activate the plugin
+        try {
+            audioPluginInstance.prepare(44100, 256)
+            audioPluginInstance.activate()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            audioPluginInstance.destroy()
+            nativePluginClient.dispose()
+            connector.close()
+            return null
+        }
+
+        // Return the plugin instance with its info and connector for lifecycle management
+        return AapPluginInstance(
+            plugin = audioPluginInstance,
+            info = serviceInfo.plugins.firstOrNull { it.pluginId == track.pluginId } ?: serviceInfo.plugins.first(),
+            connector = connector
+        )
     }
 
     fun play() {
@@ -805,6 +874,14 @@ class DawViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun setAutoScroll(on: Boolean) {
         _prefs.value = _prefs.value.copy(autoScroll = on)
+        scheduleAutosave()
+    }
+    fun setFingerEditing(on: Boolean) {
+        _prefs.value = _prefs.value.copy(fingerEditing = on)
+        scheduleAutosave()
+    }
+    fun toggleFingerEditing() {
+        _prefs.value = _prefs.value.copy(fingerEditing = !_prefs.value.fingerEditing)
         scheduleAutosave()
     }
     fun toggleVelocityEditor() {

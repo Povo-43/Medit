@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import org.androidaudioplugin.PortInformation
 import org.androidaudioplugin.PluginInformation
 import org.androidaudioplugin.hosting.AudioPluginInstance
+import org.androidaudioplugin.hosting.AudioPluginServiceConnector
 
 /**
  * Adapts an AAP (AndroidAudioPlugin) [AudioPluginInstance] to the [TrackSynth]
@@ -24,6 +25,7 @@ import org.androidaudioplugin.hosting.AudioPluginInstance
 class AapSynth(
     private val plugin: AudioPluginInstance,
     private val pluginInfo: PluginInformation,
+    private val connector: AudioPluginServiceConnector,
     private val outputSampleRate: Int = 44100,
 ) : TrackSynth {
 
@@ -274,6 +276,8 @@ class AapSynth(
         plugin.destroy()
         audioTrack.stop()
         audioTrack.release()
+        // Close the connector to release the native binder and service connection
+        connector.close()
     }
 
     /** Returns latency information for debugging and measurement. */

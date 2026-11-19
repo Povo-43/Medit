@@ -6,6 +6,7 @@ import com.medit.midi.audio.SoundFont
 import com.medit.midi.model.Project
 import org.androidaudioplugin.PluginInformation
 import org.androidaudioplugin.hosting.AudioPluginInstance
+import org.androidaudioplugin.hosting.AudioPluginServiceConnector
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -37,25 +38,25 @@ class DawAudioEngine(private val context: Context) {
      * Rebuilds track outputs for [project].
      *
      * [soundFonts] maps track index to the SoundFont loaded by the instrument
-     * library. [aapPlugins] maps track index to the AAP plugin instance.
+     * library. [aapPlugins] maps track index to the AAP plugin instance, its info, and the connector for lifecycle management.
      * Tracks without a usable sound source stay silent.
      */
     @Synchronized
     fun sync(
         project: Project,
         soundFonts: Map<Int, SoundFont?>,
-        aapPlugins: Map<Int, Pair<AudioPluginInstance, PluginInformation>?>,
+        aapPlugins: Map<Int, Triple<AudioPluginInstance, PluginInformation, AudioPluginServiceConnector>?>,
     ) {
         val anySolo = project.tracks.any { it.solo }
         val next = HashMap<Int, TrackOutput>()
         val nextGains = HashMap<Int, Float>()
         for ((index, track) in project.tracks.withIndex()) {
             val output = if (track.isAapPlugin) {
-                val pluginPair = aapPlugins[index]
-                if (pluginPair == null) continue
-                val (plugin, info) = pluginPair
+                val pluginTriple = aapPlugins[index]
+                if (pluginTriple == null) continue
+                val (plugin, info, connector) = pluginTriple
                 try {
-                    AapSynth(plugin, info)
+                    AapSynth(plugin, info, connector)
                 } catch (t: Throwable) {
                     lastError = "AAPプラグインを初期化できません: ${t.message ?: t.javaClass.simpleName}"
                     continue
