@@ -17,7 +17,7 @@
     <!-- AAP (AndroidAudioPlugin) host: query installed AAP plugin services -->
     <queries>
         <intent>
-            <action android:name="org.androidaudioplugin.AudioPluginService.V4" />
+            <action android:name="org.androidaudioplugin.AudioPluginService.V3" />
         </intent>
     </queries>
 
