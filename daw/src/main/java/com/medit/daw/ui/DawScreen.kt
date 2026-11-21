@@ -173,6 +173,7 @@ fun DawScreen(viewModel: EditorViewModel) {
 
         // ---------------- Piano roll (classic 相当の共有 UI) ----------------
         AndroidView(
+            modifier = Modifier.fillMaxSize(),
             factory = { context -> PianoRollView(context).apply { host = viewModel } },
             update = { roll ->
                 roll.syncState(
