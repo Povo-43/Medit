@@ -29,12 +29,6 @@ android {
             val pass = System.getenv("RELEASE_STORE_PASSWORD")
             val alias = System.getenv("RELEASE_KEY_ALIAS")
             val keyPass = System.getenv("RELEASE_KEY_PASSWORD")
-            if (store == null || pass.isNullOrBlank() || alias.isNullOrBlank() || keyPass.isNullOrBlank()) {
-                throw IllegalStateException(
-                    "Release signing requires RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD, " +
-                    "RELEASE_KEY_ALIAS and RELEASE_KEY_PASSWORD environment variables."
-                )
-            }
             storeFile = store
             storePassword = pass
             keyAlias = alias
@@ -52,7 +46,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            val store = System.getenv("RELEASE_STORE_FILE")
+            val pass = System.getenv("RELEASE_STORE_PASSWORD")
+            val alias = System.getenv("RELEASE_KEY_ALIAS")
+            val keyPass = System.getenv("RELEASE_KEY_PASSWORD")
+            if (store != null && pass.isNotBlank() && alias.isNotBlank() && keyPass.isNotBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
@@ -84,8 +84,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.2")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 

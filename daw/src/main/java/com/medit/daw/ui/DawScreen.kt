@@ -4,9 +4,9 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,9 +23,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.medit.daw.R
 import com.medit.shared.audio.TrackAudioStatus
 import com.medit.shared.editor.EditorUiState
 import com.medit.shared.editor.EditorViewModel
+import com.medit.shared.ui.PianoRollView
 import com.medit.shared.model.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -52,25 +55,35 @@ fun DawScreen(viewModel: EditorViewModel) {
     val playLabel = if (uiState.isPlaying) "停止" else "再生"
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text(text = "MeditDAW") },
+        // ---------------- Top bar (classic 相当) ----------------
+        androidx.compose.material3.TopAppBar(
+            title = {
+                Text(
+                    text = project?.title ?: context.getString(R.string.app_name),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            },
+            colors = androidx.compose.material3.TopAppBarDefaults.mediumTopAppBarColors(containerColor = Color(0xFF141A21)),
             actions = {
-                IconButton(onClick = { viewModel.newProject() }) {
-                    Text(text = "+", style = MaterialTheme.typography.bodyLarge)
-                }
-                IconButton(onClick = { viewModel.togglePlayback() }) {
-                    Text(text = playLabel, style = MaterialTheme.typography.bodyMedium)
+                Row {
+                    androidx.compose.material3.IconButton(onClick = { viewModel.newProject() }) {
+                        Text(text = "+", style = MaterialTheme.typography.bodyLarge)
+                    }
+                    androidx.compose.material3.IconButton(onClick = { viewModel.togglePlayback() }) {
+                        Text(text = playLabel, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             },
         )
 
+        // ---------------- Track list ----------------
         Text(
             text = "トラック",
             modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
             style = MaterialTheme.typography.titleMedium,
         )
         LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(8.dp),
         ) {
             itemsIndexed(tracks) { index, track ->
@@ -93,8 +106,7 @@ fun DawScreen(viewModel: EditorViewModel) {
                             if (isActive) Color(0xFF2A3442) else Color.Transparent,
                             shape = RoundedCornerShape(4.dp),
                         ),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                    ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = "${index + 1}. ${track.name}",
@@ -107,47 +119,47 @@ fun DawScreen(viewModel: EditorViewModel) {
                             color = Color(0xFF93A1B1),
                         )
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Button(
+                    Row {
+                        androidx.compose.material3.Button(
                             onClick = { viewModel.selectTrack(index) },
                             enabled = !isActive,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF11443F)),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFF11443F)),
                         ) {
                             Text(text = "選択", style = MaterialTheme.typography.labelSmall)
                         }
-                        Button(
+                        androidx.compose.material3.Button(
                             onClick = {
                                 pickTargetTrack = index
                                 getContentLauncher.launch("audio/*")
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF05233D)),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFF05233D)),
                         ) {
                             Text(text = "SF2…", style = MaterialTheme.typography.labelSmall)
                         }
-                        Button(
+                        androidx.compose.material3.Button(
                             onClick = {
                                 viewModel.selectTrack(index)
                                 viewModel.reloadBundledSoundFont()
                                 pickTargetTrack = -1
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF201708)),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFF201708)),
                         ) {
                             Text(text = "内蔵", style = MaterialTheme.typography.labelSmall)
                         }
-                        Button(
+                        androidx.compose.material3.Button(
                             onClick = { presetMenuOpen = if (presetMenuOpen == index) -1 else index },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF05233D)),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFF05233D)),
                         ) {
                             Text(text = "プリセット ${track.presetIndex + 1}", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
-                DropdownMenu(
+                androidx.compose.material3.DropdownMenu(
                     expanded = presetMenuOpen == index,
                     onDismissRequest = { presetMenuOpen = -1 },
                 ) {
                     viewModel.trackPresets(index).forEachIndexed { i, p ->
-                        DropdownMenuItem(
+                        androidx.compose.material3.DropdownMenuItem(
                             onClick = {
                                 viewModel.setTrackPreset(index, i)
                                 presetMenuOpen = -1
@@ -159,9 +171,10 @@ fun DawScreen(viewModel: EditorViewModel) {
             }
         }
 
+        // ---------------- Piano roll (classic 相当の共有 UI) ----------------
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .background(Color(0xFF0E1116)),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -172,12 +185,12 @@ fun DawScreen(viewModel: EditorViewModel) {
             )
         }
 
+        // ---------------- Bottom bar (classic 相当) ----------------
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(8.dp)
                 .height(56.dp),
-            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
@@ -186,7 +199,7 @@ fun DawScreen(viewModel: EditorViewModel) {
                 color = Color(0xFF93A1B1),
             )
             Row {
-                Button(
+                androidx.compose.material3.Button(
                     onClick = {
                         project?.let { p ->
                             val newTrack = Track(
@@ -203,11 +216,11 @@ fun DawScreen(viewModel: EditorViewModel) {
                             viewModel.selectTrack(p.tracks.size)
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF11443F)),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color(0xFF11443F)),
                 ) {
                     Text(text = "トラック追加", style = MaterialTheme.typography.labelSmall)
                 }
-                Button(
+                androidx.compose.material3.Button(
                     onClick = { viewModel.togglePlayback() },
                 ) {
                     Text(text = playLabel, style = MaterialTheme.typography.bodyMedium)
