@@ -657,7 +657,8 @@ class PianoRollView @JvmOverloads constructor(
         // Multi-select is an explicit tool mode: a tap toggles one note and a
         // drag (from a note or empty space) sweeps an additive marquee. Note
         // moving/resizing is intentionally suspended while it is on.
-        if (prefs.multiSelectMode) {
+        // With pen-only selection, a finger never enters selection mode.
+        if (prefs.multiSelectMode && (!prefs.penOnlySelection || stylus)) {
             downPitch = pitchAtY(event.y)
             if (note != null) {
                 downNoteId = note.id
@@ -775,7 +776,7 @@ class PianoRollView @JvmOverloads constructor(
             Mode.PENDING_EMPTY -> {
                 if (distance > touchSlop) {
                     cancelLongPressTimer()
-                    if (prefs.multiSelectMode) {
+                    if (prefs.multiSelectMode && (!prefs.penOnlySelection || isStylus(event))) {
                         beginMarquee(clearExisting = false)
                         updateMarquee(x, y)
                     } else {
@@ -792,7 +793,7 @@ class PianoRollView @JvmOverloads constructor(
                         updateMarquee(x, y)
                     } else {
                         val stylus = isStylus(event)
-                        if (!prefs.fingerEditing && !stylus) {
+                        if (!stylus && !prefs.fingerEditing && !prefs.penOnlySelection) {
                             beginPan()
                             applyPan(dx, dy)
                         } else {
@@ -848,7 +849,7 @@ class PianoRollView @JvmOverloads constructor(
                     } else {
                         if (id !in current) host?.setRollSelection(setOf(id))
                         val now = SystemClock.uptimeMillis()
-                        val editAllowed = prefs.fingerEditing || isStylus(event)
+                        val editAllowed = isStylus(event) || (prefs.fingerEditing && !prefs.penOnlySelection)
                         if (editAllowed &&
                             lastTapNoteId == id &&
                             now - lastTapAt <= 350 &&
