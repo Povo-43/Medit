@@ -15,13 +15,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import com.medit.daw.R
 import com.medit.shared.audio.TrackAudioStatus
@@ -172,18 +172,19 @@ fun DawScreen(viewModel: EditorViewModel) {
         }
 
         // ---------------- Piano roll (classic 相当の共有 UI) ----------------
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFF0E1116)),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = "ピアノロール（Medit classic 相当の共有UI）",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF93A1B1),
-            )
-        }
+        AndroidView(
+            factory = { context -> PianoRollView(context).apply { host = viewModel } },
+            update = { roll ->
+                roll.syncState(
+                    project = uiState.project,
+                    prefs = uiState.prefs,
+                    selection = uiState.selection,
+                    viewport = uiState.viewport,
+                    epoch = uiState.viewportEpoch,
+                    playing = uiState.isPlaying,
+                )
+            },
+        )
 
         // ---------------- Bottom bar (classic 相当) ----------------
         Row(
@@ -191,6 +192,7 @@ fun DawScreen(viewModel: EditorViewModel) {
                 .fillMaxWidth()
                 .padding(8.dp)
                 .height(56.dp),
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
