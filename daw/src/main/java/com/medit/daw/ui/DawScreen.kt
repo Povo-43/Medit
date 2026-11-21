@@ -41,6 +41,7 @@ fun DawScreen(viewModel: EditorViewModel) {
 
     var pickTargetTrack by remember { mutableIntStateOf(-1) }
     var presetMenuOpen by remember { mutableIntStateOf(-1) }
+    val playLabel = if (uiState.isPlaying) "停止" else "再生"
     val getContentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
         onResult = { uri ->
@@ -51,8 +52,6 @@ fun DawScreen(viewModel: EditorViewModel) {
             }
         }
     )
-
-    val playLabel = if (uiState.isPlaying) "停止" else "再生"
 
     Column(modifier = Modifier.fillMaxSize()) {
         // ---------------- Top bar (classic 相当) ----------------
