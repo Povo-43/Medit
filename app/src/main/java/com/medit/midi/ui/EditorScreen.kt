@@ -4,6 +4,8 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.*
+import androidx.compose.material3.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -874,6 +876,7 @@ private fun WideTopRow(
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        var presetMenuOpen by remember { mutableIntStateOf(-1) }
         TitleBlock(ui = ui, project = project, onRename = onRename, modifier = Modifier.weight(1f))
         Spacer(Modifier.width(14.dp))
         TransportControls(ui = ui, project = project, vm = vm)
@@ -898,6 +901,18 @@ private fun WideTopRow(
             )
         }
         Spacer(Modifier.width(6.dp))
+        // プリセット選択（トラックごとに別のSF2音色を選択可能）
+        val presets = vm.trackPresets(0)
+        if (presets.isNotEmpty()) {
+            val currentIdx = vm.currentTrackPresetIndex()
+            Button(
+                onClick = { presetMenuOpen = if (presetMenuOpen == 0) -1 else 0 },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF05233D)),
+            ) {
+                Text(text = "プリセット ${currentIdx + 1}", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        Spacer(Modifier.width(6.dp))
         MidiChip(midi = ui.midi, onClick = onMidiInput)
         Spacer(Modifier.width(6.dp))
         HistoryButtons(ui = ui, vm = vm)
@@ -915,6 +930,20 @@ private fun WideTopRow(
             onMeta = onMeta,
             onMidiInput = onMidiInput,
         )
+        DropdownMenu(
+            expanded = presetMenuOpen == 0,
+            onDismissRequest = { presetMenuOpen = -1 },
+        ) {
+            vm.trackPresets(0).forEachIndexed { i, p ->
+                DropdownMenuItem(
+                    onClick = {
+                        vm.setTrackPreset(0, i)
+                        presetMenuOpen = -1
+                    },
+                    text = { Text(text = "${i + 1}. ${p.name}") },
+                )
+            }
+        }
     }
 }
 
@@ -946,6 +975,7 @@ private fun CompactTopRows(
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            var presetMenuOpen by remember { mutableIntStateOf(-1) }
             TitleBlock(ui = ui, project = project, onRename = onRename, modifier = Modifier.weight(1f))
             if (project.tracks.size > 1) {
                 MetaChip(
@@ -970,6 +1000,20 @@ private fun CompactTopRows(
                 onMeta = onMeta,
                 onMidiInput = onMidiInput,
             )
+        DropdownMenu(
+            expanded = presetMenuOpen == 0,
+            onDismissRequest = { presetMenuOpen = -1 },
+        ) {
+            vm.trackPresets(0).forEachIndexed { i, p ->
+                DropdownMenuItem(
+                    onClick = {
+                        vm.setTrackPreset(0, i)
+                        presetMenuOpen = -1
+                    },
+                    text = { Text(text = "${i + 1}. ${p.name}") },
+                )
+            }
+        }
         }
         Row(
             Modifier

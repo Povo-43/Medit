@@ -42,24 +42,14 @@ data class SfRegion(
 )
 
 /**
- * A parsed SoundFont 2.04 instrument.
- *
- * Supported: mono samples, stereo sample pairs (each half is rendered to its
- * own output channel), key/velocity zones, root key, coarse/fine tuning,
- * volume envelope, attenuation, pan, sample loop modes, global preset /
- * instrument zones and generator precedence (instrument wins for non-additive
- * values). Preset selection falls back over every preset when the preferred
- * one has no playable zones. Modulators, filters and LFOs are not applied;
- * they are ignored rather than silently mangled.
+ * Parsed preset header used internally while loading a bank.
  */
-class SoundFont(
+private data class PresetHeader(
     val name: String,
-    val presetName: String,
-    val sampleData: ShortArray,
-    val regions: List<SfRegion>,
-) {
-    val regionCount: Int get() = regions.size
-}
+    val program: Int,
+    val bank: Int,
+    val bagIndex: Int,
+)
 
 object SoundFontLoader {
 
@@ -205,12 +195,124 @@ object SoundFontLoader {
         }
         if (sampleHeaders.isEmpty()) throw SoundFontException("サンプルヘッダがありません")
 
-        data class PresetHeader(
-            val name: String,
-            val program: Int,
-            val bank: Int,
-            val bagIndex: Int,
+        val presets = List(phdrCount - 1) { i ->
+            val o = i * 38
+            PresetHeader(
+                name = readFixedString(phdr, o, 20),
+                program = readShortLE(phdr, o + 20) and 0xFFFF,
+                bank = readShortLE(phdr, o + 22) and 0xFFFF,
+                bagIndex = readShortLE(phdr, o + 24) and 0xFFFF,
+            )
+        }
+        val instHeaders = List(instCount - 1) { i ->
+            val o = i * 22
+            readShortLE(insts, o + 20) and 0xFFFF
+        }
+
+        // All presets are decoded up front so the caller can switch presets
+        // later without re-parsing the bank. The first playable preset is
+        // selected by default.
+        val sf = SoundFont(
+            name = infoName ?: "Piano SoundFont",
+            sampleData = samples,
+            presets = presets.mapIndexed { idx, p ->
+                SoundFontPreset(idx, p.name, p.program, p.bank)
+            },
         )
+        var firstPlayable = -1
+        for (i in presets.indices) {
+            val found = regionsFor(
+                i, presets, pbag, pgen, pgenCount, pbagCount,
+                instHeaders, ibag, igen, igenCount, ibagCount,
+                sampleHeaders, samples,
+            )
+            if (found.isNotEmpty()) {
+                sf.setPresetRegions(i, found.sortedWith(compareBy({ it.keyLow }, { it.velocityLow })))
+                if (firstPlayable < 0) firstPlayable = i
+            }
+        }
+        if (firstPlayable < 0) throw SoundFontException("再生可能なゾーンがありません")
+        return sf
+    }
+
+    /**
+     * Loads every playable preset of the bank as a separate [SoundFont], so the
+     * caller can switch presets without re-decoding samples. All returned
+     * instances share the same [sampleData].
+     */
+    fun loadAllPresets(bytes: ByteArray): List<SoundFont> =
+        loadAllPresets(ByteArraySource(bytes))
+
+    fun loadAllPresets(file: File): List<SoundFont> =
+        RandomAccessFile(file, "r").use { loadAllPresets(FileSource(it)) }
+
+    private fun loadAllPresets(source: Source): List<SoundFont> {
+        if (source.size < 12) throw SoundFontException("SoundFontファイルが短すぎます")
+        if (source.size > ABSOLUTE_MAX_FILE_BYTES) throw SoundFontException("SoundFontファイルが大きすぎます")
+
+        val head = ByteArray(12)
+        source.readFully(0, head, 12)
+        if (readAscii(head, 0, 4) != "RIFF") throw SoundFontException("RIFFヘッダがありません")
+        if (readAscii(head, 8, 4) != "sfbk") throw SoundFontException("SoundFont (sfbk) ではありません")
+
+        val parts = Parts()
+        var p = 12L
+        while (p + 8 <= source.size) {
+            val chunkHead = ByteArray(8)
+            source.readFully(p, chunkHead, 8)
+            val id = readAscii(chunkHead, 0, 4)
+            val size = readIntLE(chunkHead, 4)
+            if (size < 0 || p + 8 + size > source.size) throw SoundFontException("壊れたRIFFチャンク")
+            if (id == "LIST") parseList(source, p + 8, p + 8 + size, parts)
+            p += 8 + size + (size and 1)
+        }
+
+        if (parts.sampleOffset < 0) throw SoundFontException(
+            "SF2のサンプルデータがありません (SF3/Ogg形式には対応していません)"
+        )
+        if (parts.sampleBytes % 2 != 0) throw SoundFontException("サンプルデータが壊れています")
+        val sampleCount = parts.sampleBytes / 2
+        requireSampleBudget(sampleCount)
+        val samples = readSamples(source, parts.sampleOffset, sampleCount)
+
+        val hydra = parts.hydra
+        val infoName = parts.infoName
+
+        val phdr = hydra["phdr"] ?: throw SoundFontException("phdrがありません")
+        val pbag = hydra["pbag"] ?: throw SoundFontException("pbagがありません")
+        val pgen = hydra["pgen"] ?: throw SoundFontException("pgenがありません")
+        val insts = hydra["inst"] ?: throw SoundFontException("instがありません")
+        val ibag = hydra["ibag"] ?: throw SoundFontException("ibagがありません")
+        val igen = hydra["igen"] ?: throw SoundFontException("igenがありません")
+        val shdr = hydra["shdr"] ?: throw SoundFontException("shdrがありません")
+
+        val phdrCount = phdr.size / 38
+        val pbagCount = pbag.size / 4
+        val pgenCount = pgen.size / 4
+        val instCount = insts.size / 22
+        val ibagCount = ibag.size / 4
+        val igenCount = igen.size / 4
+        val shdrCount = shdr.size / 46
+        if (phdrCount < 2 || instCount < 2 || shdrCount < 2 || pbagCount < 2 || ibagCount < 2) {
+            throw SoundFontException("SoundFontのヘッダが不足しています")
+        }
+
+        val sampleHeaders = List(shdrCount - 1) { i ->
+            val o = i * 46
+            SampleHeader(
+                name = readFixedString(shdr, o, 20),
+                start = readIntLE(shdr, o + 20),
+                end = readIntLE(shdr, o + 24),
+                loopStart = readIntLE(shdr, o + 28),
+                loopEnd = readIntLE(shdr, o + 32),
+                sampleRate = readIntLE(shdr, o + 36),
+                originalPitch = shdr[o + 40].toInt() and 0xFF,
+                pitchCorrection = shdr[o + 41].toInt(),
+                sampleLink = readShortLE(shdr, o + 42) and 0xFFFF,
+                sampleType = readShortLE(shdr, o + 44) and 0xFFFF,
+            )
+        }
+        if (sampleHeaders.isEmpty()) throw SoundFontException("サンプルヘッダがありません")
 
         val presets = List(phdrCount - 1) { i ->
             val o = i * 38
@@ -221,196 +323,31 @@ object SoundFontLoader {
                 bagIndex = readShortLE(phdr, o + 24) and 0xFFFF,
             )
         }
-        // The preferred preset (bank 0 program 0) is tried first, then every
-        // remaining preset in file order so odd banks still end up playable.
-        val preferredIndex = presets.indexOfFirst { it.bank == 0 && it.program == 0 }
-            .takeIf { it >= 0 } ?: 0
-        val presetOrder = listOf(preferredIndex) + presets.indices.filter { it != preferredIndex }
-
-        fun pbagGen(index: Int): Pair<Int, Int> {
-            val o = index * 4
-            return readShortLE(pbag, o) to readShortLE(pbag, o + 2)
-        }
-
-        fun zoneGenerators(
-            startBag: Int,
-            endBag: Int,
-            bags: ByteArray,
-            gens: ByteArray,
-            genCount: Int,
-            bagCount: Int,
-        ): List<Map<Int, Int>> {
-            val result = ArrayList<Map<Int, Int>>()
-            val limit = endBag.coerceAtMost(bagCount - 1)
-            for (b in startBag until limit) {
-                if (b < 0 || b >= bagCount) break
-                val bo = b * 4
-                val genStart = readShortLE(bags, bo) and 0xFFFF
-                val nextBo = (b + 1) * 4
-                if (nextBo + 4 > bags.size) break
-                val genEnd = readShortLE(bags, nextBo) and 0xFFFF
-                val map = HashMap<Int, Int>()
-                var g = genStart
-                val ge = minOf(genEnd, genCount)
-                while (g < ge) {
-                    val go = g * 4
-                    val oper = readShortLE(gens, go) and 0xFFFF
-                    val amount = readShortLE(gens, go + 2)
-                    map[oper] = amount
-                    g++
-                }
-                result += map
-            }
-            return result
-        }
-
         val instHeaders = List(instCount - 1) { i ->
             val o = i * 22
             readShortLE(insts, o + 20) and 0xFFFF
         }
 
-        /**
-         * Builds the playable regions of one preset. Stereo sample pairs are
-         * kept as two regions, one per side, each rendered to its own output
-         * channel; mono samples stay centred.
-         */
-        fun regionsFor(presetIndex: Int): List<SfRegion> {
-            val chosen = presets[presetIndex]
-            val presetZoneEnd = presets.getOrNull(presetIndex + 1)?.bagIndex ?: pbagCount
-            val presetZones = zoneGenerators(
-                chosen.bagIndex, presetZoneEnd, pbag, pgen, pgenCount, pbagCount
+        val presetInfos = presets.mapIndexed { idx, p ->
+            SoundFontPreset(idx, p.name, p.program, p.bank)
+        }
+
+        return presets.indices.mapNotNull { presetIndex ->
+            val found = regionsFor(
+                presetIndex, presets, pbag, pgen, pgenCount, pbagCount,
+                instHeaders, ibag, igen, igenCount, ibagCount,
+                sampleHeaders, samples,
             )
-            val regions = ArrayList<SfRegion>()
-            var presetGlobal = emptyMap<Int, Int>()
-
-            for (pz in presetZones) {
-                val instId = pz[41]
-                if (instId == null) {
-                    presetGlobal = presetGlobal + pz
-                    continue
-                }
-                if (instId < 0 || instId >= instHeaders.size) continue
-                val mergedPreset = presetGlobal + pz
-                val pKey = rangeOf(mergedPreset[43])
-                val pVel = rangeOf(mergedPreset[44])
-
-                val bagStart = instHeaders[instId]
-                val bagEnd = instHeaders.getOrNull(instId + 1) ?: ibagCount
-                val instZones = zoneGenerators(bagStart, bagEnd, ibag, igen, igenCount, ibagCount)
-                var instGlobal = emptyMap<Int, Int>()
-
-                for (iz in instZones) {
-                    val sampleId = iz[53]
-                    if (sampleId == null) {
-                        instGlobal = instGlobal + iz
-                        continue
-                    }
-                    if (sampleId < 0 || sampleId >= sampleHeaders.size) continue
-                    val sh = sampleHeaders[sampleId]
-                    val side = stereoSideOf(sh, sampleHeaders)
-                    val mergedInst = instGlobal + iz
-                    val iKey = rangeOf(mergedInst[43])
-                    val iVel = rangeOf(mergedInst[44])
-                    val keyLow = maxOf(pKey.first, iKey.first)
-                    val keyHigh = minOf(pKey.second, iKey.second)
-                    val velLow = maxOf(pVel.first, iVel.first)
-                    val velHigh = minOf(pVel.second, iVel.second)
-                    if (keyLow > keyHigh || velLow > velHigh) continue
-                    val gens = HashMap<Int, Int>()
-                    gens.putAll(mergedPreset)
-                    gens.putAll(mergedInst)
-
-                    fun sampleOffset(oper: Int): Int {
-                        val coarse = if (oper == 2) gens[45] ?: 0 else if (oper == 3) gens[50] ?: 0 else 0
-                        return (gens[oper] ?: 0) + coarse * 32768 +
-                            if (oper == 0 || oper == 1) (gens[if (oper == 0) 4 else 12] ?: 0) * 32768 else 0
-                    }
-
-                    var start = sh.start + sampleOffset(0)
-                    var end = sh.end + sampleOffset(1)
-                    var loopStart = sh.loopStart + sampleOffset(2)
-                    var loopEnd = sh.loopEnd + sampleOffset(3)
-                    if (start < 0) start = 0
-                    if (end > samples.size) end = samples.size
-                    if (end <= start + 1) continue
-                    if (loopStart < start) loopStart = start
-                    if (loopEnd > end) loopEnd = end
-                    val loopMode = (gens[54] ?: 0) and 0xFFFF
-                    val hasLoop = loopMode in 1..3 && loopEnd > loopStart + 1
-
-                    val sampleRate = sh.sampleRate.takeIf { it in 4000..192000 } ?: 32000
-                    val root = (gens[58]?.takeIf { it in 0..127 })
-                        ?: sh.originalPitch.takeIf { it in 0..127 }
-                        ?: 60
-                    val tune = (gens[52] ?: 0).toDouble() + sh.pitchCorrection + (gens[51] ?: 0) * 100.0
-                    val attenuation = (gens[48] ?: 0).toDouble()
-                    val pan = ((gens[17] ?: 0).coerceIn(-500, 500)) / 1000.0
-                    val env = SfEnvelope(
-                        delay = timecents(gens[33] ?: -12000),
-                        attack = timecents(gens[34] ?: -12000),
-                        hold = timecents(gens[35] ?: -12000),
-                        decay = timecents(gens[36] ?: -12000),
-                        sustain = centibelsToGain((gens[37] ?: 0).coerceIn(0, 1440)),
-                        release = timecents(gens[38] ?: -12000),
-                    )
-                    regions += SfRegion(
-                        sampleStart = start,
-                        sampleEnd = end,
-                        loopStart = if (hasLoop) loopStart else 0,
-                        loopEnd = if (hasLoop) loopEnd else 0,
-                        sampleRate = sampleRate,
-                        rootKey = root,
-                        tuneCents = tune,
-                        keyLow = keyLow,
-                        keyHigh = keyHigh,
-                        velocityLow = velLow,
-                        velocityHigh = velHigh,
-                        attenuationCb = attenuation,
-                        pan = pan,
-                        loopMode = if (hasLoop) loopMode else 0,
-                        envelope = env,
-                        exclusiveClass = gens[57] ?: 0,
-                        stereoSide = side,
-                    )
-                }
-            }
-
-            // A stereo half whose counterpart never appears would stay silent
-            // on one side (the "sound only in the left ear" bug). Such orphans
-            // play centred instead — pan included, because a pair zone's pan
-            // usually just reinforces its side and would keep the note
-            // hard-panned into the channel without audio.
-            fun hasCounterpart(r: SfRegion): Boolean {
-                if (r.stereoSide == 0) return true
-                val other = -r.stereoSide
-                return regions.any { o ->
-                    o.stereoSide == other &&
-                        o.keyLow <= r.keyHigh && o.keyHigh >= r.keyLow &&
-                        o.velocityLow <= r.velocityHigh && o.velocityHigh >= r.velocityLow
-                }
-            }
-            return regions.map {
-                if (hasCounterpart(it)) it else it.copy(stereoSide = 0, pan = 0.0)
-            }
-        }
-
-        // Every preset is tried in order; stereo pairs are first-class now, so
-        // a bank no longer needs a mono fallback pass to be playable.
-        for (presetIndex in presetOrder) {
-            val found = regionsFor(presetIndex)
-            if (found.isNotEmpty()) {
-                return SoundFont(
+            if (found.isEmpty()) null else
+                SoundFont(
                     name = infoName ?: "Piano SoundFont",
-                    presetName = presets[presetIndex].name,
                     sampleData = samples,
-                    regions = found.sortedWith(compareBy({ it.keyLow }, { it.velocityLow })),
-                )
-            }
+                    presets = presetInfos,
+                ).also { sf ->
+                    sf.setPresetRegions(presetIndex, found.sortedWith(compareBy({ it.keyLow }, { it.velocityLow })))
+                }
         }
-        throw SoundFontException("再生可能なゾーンがありません")
     }
-
-    fun load(input: ByteArrayInputStream): SoundFont = load(input.readBytes())
 
     /** Records the sample chunk and loads the small hydra chunks; never the samples. */
     private fun parseList(source: Source, start: Long, end: Long, parts: Parts) {
@@ -445,6 +382,182 @@ object SoundFontLoader {
                 }
             }
             p += 8 + size + (size and 1)
+        }
+    }
+
+    private fun pbagGen(pbag: ByteArray, index: Int): Pair<Int, Int> {
+        val o = index * 4
+        return readShortLE(pbag, o) to readShortLE(pbag, o + 2)
+    }
+
+    private fun zoneGenerators(
+        startBag: Int,
+        endBag: Int,
+        bags: ByteArray,
+        gens: ByteArray,
+        genCount: Int,
+        bagCount: Int,
+    ): List<Map<Int, Int>> {
+        val result = ArrayList<Map<Int, Int>>()
+        val limit = endBag.coerceAtMost(bagCount - 1)
+        for (b in startBag until limit) {
+            if (b < 0 || b >= bagCount) break
+            val bo = b * 4
+            val genStart = readShortLE(bags, bo) and 0xFFFF
+            val nextBo = (b + 1) * 4
+            if (nextBo + 4 > bags.size) break
+            val genEnd = readShortLE(bags, nextBo) and 0xFFFF
+            val map = HashMap<Int, Int>()
+            var g = genStart
+            val ge = minOf(genEnd, genCount)
+            while (g < ge) {
+                val go = g * 4
+                val oper = readShortLE(gens, go) and 0xFFFF
+                val amount = readShortLE(gens, go + 2)
+                map[oper] = amount
+                g++
+            }
+            result += map
+        }
+        return result
+    }
+
+    /**
+     * Builds the playable regions of one preset. Stereo sample pairs are
+     * kept as two regions, one per side, each rendered to its own output
+     * channel; mono samples stay centred.
+     */
+    private fun regionsFor(
+        presetIndex: Int,
+        presets: List<PresetHeader>,
+        pbag: ByteArray,
+        pgen: ByteArray,
+        pgenCount: Int,
+        pbagCount: Int,
+        instHeaders: List<Int>,
+        ibag: ByteArray,
+        igen: ByteArray,
+        igenCount: Int,
+        ibagCount: Int,
+        sampleHeaders: List<SampleHeader>,
+        samples: ShortArray,
+    ): List<SfRegion> {
+        val chosen = presets[presetIndex]
+        val presetZoneEnd = presets.getOrNull(presetIndex + 1)?.bagIndex ?: pbagCount
+        val presetZones = zoneGenerators(
+            chosen.bagIndex, presetZoneEnd, pbag, pgen, pgenCount, pbagCount
+        )
+        val regions = ArrayList<SfRegion>()
+        var presetGlobal = emptyMap<Int, Int>()
+
+        for (pz in presetZones) {
+            val instId = pz[41]
+            if (instId == null) {
+                presetGlobal = presetGlobal + pz
+                continue
+            }
+            if (instId < 0 || instId >= instHeaders.size) continue
+            val mergedPreset = presetGlobal + pz
+            val pKey = rangeOf(mergedPreset[43])
+            val pVel = rangeOf(mergedPreset[44])
+
+            val bagStart = instHeaders[instId]
+            val bagEnd = instHeaders.getOrNull(instId + 1) ?: ibagCount
+            val instZones = zoneGenerators(bagStart, bagEnd, ibag, igen, igenCount, ibagCount)
+            var instGlobal = emptyMap<Int, Int>()
+
+            for (iz in instZones) {
+                val sampleId = iz[53]
+                if (sampleId == null) {
+                    instGlobal = instGlobal + iz
+                    continue
+                }
+                if (sampleId < 0 || sampleId >= sampleHeaders.size) continue
+                val sh = sampleHeaders[sampleId]
+                val side = stereoSideOf(sh, sampleHeaders)
+                val mergedInst = instGlobal + iz
+                val iKey = rangeOf(mergedInst[43])
+                val iVel = rangeOf(mergedInst[44])
+                val keyLow = maxOf(pKey.first, iKey.first)
+                val keyHigh = minOf(pKey.second, iKey.second)
+                val velLow = maxOf(pVel.first, iVel.first)
+                val velHigh = minOf(pVel.second, iVel.second)
+                if (keyLow > keyHigh || velLow > velHigh) continue
+                val gens = HashMap<Int, Int>()
+                gens.putAll(mergedPreset)
+                gens.putAll(mergedInst)
+
+                fun sampleOffset(oper: Int): Int {
+                    val coarse = if (oper == 2) gens[45] ?: 0 else if (oper == 3) gens[50] ?: 0 else 0
+                    return (gens[oper] ?: 0) + coarse * 32768 +
+                        if (oper == 0 || oper == 1) (gens[if (oper == 0) 4 else 12] ?: 0) * 32768 else 0
+                }
+
+                var start = sh.start + sampleOffset(0)
+                var end = sh.end + sampleOffset(1)
+                var loopStart = sh.loopStart + sampleOffset(2)
+                var loopEnd = sh.loopEnd + sampleOffset(3)
+                if (start < 0) start = 0
+                if (end > samples.size) end = samples.size
+                if (end <= start + 1) continue
+                if (loopStart < start) loopStart = start
+                if (loopEnd > end) loopEnd = end
+                val loopMode = (gens[54] ?: 0) and 0xFFFF
+                val hasLoop = loopMode in 1..3 && loopEnd > loopStart + 1
+
+                val sampleRate = sh.sampleRate.takeIf { it in 4000..192000 } ?: 32000
+                val root = (gens[58]?.takeIf { it in 0..127 })
+                    ?: sh.originalPitch.takeIf { it in 0..127 }
+                    ?: 60
+                val tune = (gens[52] ?: 0).toDouble() + sh.pitchCorrection + (gens[51] ?: 0) * 100.0
+                val attenuation = (gens[48] ?: 0).toDouble()
+                val pan = ((gens[17] ?: 0).coerceIn(-500, 500)) / 1000.0
+                val env = SfEnvelope(
+                    delay = timecents(gens[33] ?: -12000),
+                    attack = timecents(gens[34] ?: -12000),
+                    hold = timecents(gens[35] ?: -12000),
+                    decay = timecents(gens[36] ?: -12000),
+                    sustain = centibelsToGain((gens[37] ?: 0).coerceIn(0, 1440)),
+                    release = timecents(gens[38] ?: -12000),
+                )
+                regions += SfRegion(
+                    sampleStart = start,
+                    sampleEnd = end,
+                    loopStart = if (hasLoop) loopStart else 0,
+                    loopEnd = if (hasLoop) loopEnd else 0,
+                    sampleRate = sampleRate,
+                    rootKey = root,
+                    tuneCents = tune,
+                    keyLow = keyLow,
+                    keyHigh = keyHigh,
+                    velocityLow = velLow,
+                    velocityHigh = velHigh,
+                    attenuationCb = attenuation,
+                    pan = pan,
+                    loopMode = if (hasLoop) loopMode else 0,
+                    envelope = env,
+                    exclusiveClass = gens[57] ?: 0,
+                    stereoSide = side,
+                )
+            }
+        }
+
+        // A stereo half whose counterpart never appears would stay silent
+        // on one side (the "sound only in the left ear" bug). Such orphans
+        // play centred instead — pan included, because a pair zone's pan
+        // usually just reinforces its side and would keep the note
+        // hard-panned into the channel without audio.
+        fun hasCounterpart(r: SfRegion): Boolean {
+            if (r.stereoSide == 0) return true
+            val other = -r.stereoSide
+            return regions.any { o ->
+                o.stereoSide == other &&
+                    o.keyLow <= r.keyHigh && o.keyHigh >= r.keyLow &&
+                    o.velocityLow <= r.velocityHigh && o.velocityHigh >= r.velocityLow
+            }
+        }
+        return regions.map {
+            if (hasCounterpart(it)) it else it.copy(stereoSide = 0, pan = 0.0)
         }
     }
 

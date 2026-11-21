@@ -14,6 +14,7 @@ import com.medit.shared.audio.MultiAudioEngine
 import com.medit.shared.audio.AudioStatus
 import com.medit.shared.audio.PlaybackEngine
 import com.medit.shared.audio.SoundFontLoader
+import com.medit.shared.audio.SoundFontPreset
 import com.medit.shared.audio.TrackAudioStatus
 import com.medit.shared.data.AutosaveData
 import com.medit.shared.data.EditorPrefs
@@ -807,6 +808,23 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
             is TrackAudioStatus.Ready -> Unit
         }
         playback.play(p)
+    }
+
+    /** Switches the SoundFont preset (instrument) of the active track. */
+    fun setTrackPreset(trackIndex: Int, presetIndex: Int) {
+        audio.selectPreset(trackIndex, presetIndex)
+        postMessage("プリセットを${presetIndex + 1}番に切り替えました")
+    }
+
+    /** Presets of the given track, empty when no SoundFont is loaded. */
+    fun trackPresets(trackIndex: Int): List<SoundFontPreset> {
+        return audio.soundFontFor(trackIndex)?.presets ?: emptyList()
+    }
+
+    /** Current preset index of the active track. */
+    fun currentTrackPresetIndex(): Int {
+        val ti = activeTrackIndex()
+        return audio.soundFontFor(ti)?.presetIndex ?: 0
     }
 
     fun pause() = playback.pause()

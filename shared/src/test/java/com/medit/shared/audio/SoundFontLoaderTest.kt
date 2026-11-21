@@ -23,7 +23,7 @@ class SoundFontLoaderTest {
     fun bundledPianoParsesIntoPlayableRegions() {
         val font = bundledFont()
         assertTrue(font.name.isNotBlank())
-        assertTrue(font.presetName.isNotBlank())
+        assertTrue(font.activePreset()?.name.orEmpty().isNotBlank())
         assertTrue(font.sampleData.isNotEmpty())
         assertTrue(font.regions.isNotEmpty())
 
@@ -83,7 +83,7 @@ class SoundFontLoaderTest {
         val fromBytes = SoundFontLoader.load(file.readBytes())
 
         assertEquals(fromBytes.name, fromFile.name)
-        assertEquals(fromBytes.presetName, fromFile.presetName)
+        assertEquals(fromBytes.activePreset()?.name, fromFile.activePreset()?.name)
         assertEquals(fromBytes.sampleData.size, fromFile.sampleData.size)
         assertEquals(fromBytes.regions.size, fromFile.regions.size)
         assertTrue(fromFile.sampleData.contentEquals(fromBytes.sampleData))

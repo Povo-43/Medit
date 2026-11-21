@@ -77,13 +77,16 @@ class AudioEngine(private val context: Context) {
         val old = synth
         synth = newSynth
         this.font = font
-        _status.value = AudioStatus.Ready(font.name, font.presetName, font.regionCount)
+        _status.value = AudioStatus.Ready(font.name, font.activePreset()?.name ?: "Preset 0", font.regionCount)
         old?.allNotesOff()
         old?.close()
     }
 
     /** The SoundFont currently used by the realtime synth, if loaded. */
     fun activeSoundFont(): SoundFont? = font
+
+    /** The SoundFont assigned to [trackIndex] (classic has a single track). */
+    fun soundFontFor(trackIndex: Int): SoundFont? = if (trackIndex == 0) font else null
 
     fun noteOn(pitch: Int, velocity: Int, channel: Int = 0) {
         synth?.noteOn(pitch, velocity, channel)
@@ -99,6 +102,11 @@ class AudioEngine(private val context: Context) {
 
     fun allNotesOff(fast: Boolean = false) {
         synth?.allNotesOff(fast)
+    }
+
+    /** Switches the active SoundFont preset (instrument) of the synth. */
+    fun selectPreset(trackIndex: Int = 0, presetIndex: Int) {
+        synth?.selectPreset(presetIndex)
     }
 
     fun setVolume(value: Float) {

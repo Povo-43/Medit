@@ -37,6 +37,7 @@ fun DawScreen(viewModel: EditorViewModel) {
     val tracks = project?.tracks ?: emptyList()
 
     var pickTargetTrack by remember { mutableIntStateOf(-1) }
+    var presetMenuOpen by remember { mutableIntStateOf(-1) }
     val getContentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
         onResult = { uri ->
@@ -133,6 +134,26 @@ fun DawScreen(viewModel: EditorViewModel) {
                         ) {
                             Text(text = "内蔵", style = MaterialTheme.typography.labelSmall)
                         }
+                        Button(
+                            onClick = { presetMenuOpen = if (presetMenuOpen == index) -1 else index },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF05233D)),
+                        ) {
+                            Text(text = "プリセット ${track.presetIndex + 1}", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                DropdownMenu(
+                    expanded = presetMenuOpen == index,
+                    onDismissRequest = { presetMenuOpen = -1 },
+                ) {
+                    viewModel.trackPresets(index).forEachIndexed { i, p ->
+                        DropdownMenuItem(
+                            onClick = {
+                                viewModel.setTrackPreset(index, i)
+                                presetMenuOpen = -1
+                            },
+                            text = { Text(text = "${i + 1}. ${p.name}") },
+                        )
                     }
                 }
             }

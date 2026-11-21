@@ -52,7 +52,7 @@ class MultiAudioEngine(private val context: Context) {
         synths[trackIndex] = newSynth
         fonts[trackIndex] = font
         val name = font.name
-        val preset = font.presetName
+        val preset = font.activePreset()?.name ?: "Preset 0"
         val regions = font.regionCount
         postStatus(trackIndex, TrackAudioStatus.Ready(trackIndex, name, preset, regions))
     }
@@ -115,6 +115,11 @@ class MultiAudioEngine(private val context: Context) {
     /** All notes off on all tracks. */
     fun allNotesOffAll(fast: Boolean = false) {
         synths.values.forEach { it.allNotesOff(fast) }
+    }
+
+    /** Switches the active preset of the synth for [trackIndex]. */
+    fun selectPreset(trackIndex: Int, presetIndex: Int) {
+        synths[trackIndex]?.selectPreset(presetIndex)
     }
 
     fun setVolume(value: Float) {

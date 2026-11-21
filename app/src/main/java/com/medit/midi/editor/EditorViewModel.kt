@@ -14,6 +14,7 @@ import com.medit.midi.audio.AudioExportFormat
 import com.medit.midi.audio.AudioStatus
 import com.medit.midi.audio.PlaybackEngine
 import com.medit.midi.audio.SoundFontLoader
+import com.medit.midi.audio.SoundFontPreset
 import com.medit.midi.data.AutosaveData
 import com.medit.midi.data.EditorPrefs
 import com.medit.midi.data.ProjectRepository
@@ -799,6 +800,22 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             is AudioStatus.Ready -> Unit
         }
         playback.play(p)
+    }
+
+    /** Switches the SoundFont preset (instrument) of the (single) track. */
+    fun setTrackPreset(trackIndex: Int, presetIndex: Int) {
+        audio.selectPreset(trackIndex, presetIndex)
+        postMessage("プリセットを${presetIndex + 1}番に切り替えました")
+    }
+
+    /** Presets of the given track, empty when no SoundFont is loaded. */
+    fun trackPresets(trackIndex: Int): List<SoundFontPreset> {
+        return audio.soundFontFor(trackIndex)?.presets ?: emptyList()
+    }
+
+    /** Current preset index of the active track. */
+    fun currentTrackPresetIndex(): Int {
+        return audio.soundFontFor(0)?.presetIndex ?: 0
     }
 
     fun pause() = playback.pause()

@@ -77,7 +77,7 @@ class AudioEngine(private val context: Context) {
         val old = synth
         synth = newSynth
         this.font = font
-        _status.value = AudioStatus.Ready(font.name, font.presetName, font.regionCount)
+        _status.value = AudioStatus.Ready(font.name, font.activePreset()?.name ?: "Preset 0", font.regionCount)
         old?.allNotesOff()
         old?.close()
     }
@@ -99,6 +99,11 @@ class AudioEngine(private val context: Context) {
 
     fun allNotesOff(fast: Boolean = false) {
         synth?.allNotesOff(fast)
+    }
+
+    /** Switches the active SoundFont preset (instrument) of the synth. */
+    fun selectPreset(presetIndex: Int) {
+        synth?.selectPreset(presetIndex)
     }
 
     fun setVolume(value: Float) {
