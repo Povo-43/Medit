@@ -99,6 +99,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -289,7 +290,7 @@ fun DawAlertDialog(
                         .fillMaxWidth()
                         .heightIn(max = maxDialogHeight)
                         .clickable(
-                            interactionSource = MutableInteractionSource(),
+                            interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = {},
                         ),
@@ -464,9 +465,12 @@ fun SoundFontSettingsCard(
         return
     }
 
+    // Collect instruments StateFlow as state to avoid lint error
+    val instruments: List<InstrumentLibrary.Entry> by vm.instruments.collectAsStateWithLifecycle()
+
     val baseSf = project?.tracks?.getOrNull(project.activeTrack ?: 0)?.soundId
-        ?.let { soundId -> vm.instruments.value.firstOrNull { it.id == soundId } }
-        ?: vm.instruments.value.firstOrNull()
+        ?.let { soundId -> instruments.firstOrNull { it.id == soundId } }
+        ?: instruments.firstOrNull()
 
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -484,7 +488,7 @@ fun SoundFontSettingsCard(
                 .fillMaxWidth()
                 .padding(vertical = 8.dp),
         ) {
-            vm.instruments.value.forEach { inst ->
+            instruments.forEach { inst ->
                 val isSelected = baseSf?.id == inst.id
                 Surface(
                     onClick = { vm.setSoundFont(inst.id) },
