@@ -21,14 +21,24 @@ android {
         create("release") {
             val envStore = System.getenv("RELEASE_STORE_FILE")
             val localStore = rootProject.file("keystore/release.keystore")
-            storeFile = when {
+            val store = when {
                 !envStore.isNullOrBlank() -> file(envStore)
                 localStore.exists() -> localStore
                 else -> null
             }
-            storePassword = System.getenv("RELEASE_STORE_PASSWORD")
-            keyAlias = System.getenv("RELEASE_KEY_ALIAS")
-            keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            val pass = System.getenv("RELEASE_STORE_PASSWORD")
+            val alias = System.getenv("RELEASE_KEY_ALIAS")
+            val keyPass = System.getenv("RELEASE_KEY_PASSWORD")
+            if (store == null || pass.isNullOrBlank() || alias.isNullOrBlank() || keyPass.isNullOrBlank()) {
+                throw IllegalStateException(
+                    "Release signing requires RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD, " +
+                    "RELEASE_KEY_ALIAS and RELEASE_KEY_PASSWORD environment variables."
+                )
+            }
+            storeFile = store
+            storePassword = pass
+            keyAlias = alias
+            keyPassword = keyPass
             enableV1Signing = true
             enableV2Signing = true
             enableV3Signing = true
