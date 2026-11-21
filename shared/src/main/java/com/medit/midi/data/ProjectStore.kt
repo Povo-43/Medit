@@ -46,6 +46,8 @@ data class EditorPrefs(
     val multiSelectMode: Boolean = false,
     /** Volume multiplier for a loaded external SoundFont (1 = neutral). */
     val soundFontVolume: Float = 1f,
+    /** Selected SoundFont ID for each track. */
+    val soundId: String = "builtin",
 )
 
 data class AutosaveData(
@@ -60,7 +62,7 @@ data class AutosaveData(
  * from SAF import/export: editing never writes to the user's .mid file.
  */
 object ProjectStore {
-    private const val VERSION = 3
+    private const val VERSION = 4
     private const val MAX_FILE = 24 * 1024 * 1024
 
     private fun dir(context: Context): File = File(context.filesDir, "autosave").apply { mkdirs() }

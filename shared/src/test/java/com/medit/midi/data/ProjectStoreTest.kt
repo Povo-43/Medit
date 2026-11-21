@@ -153,7 +153,7 @@ class ProjectStoreTest {
         val original = projectWithMixerFields()
         val data = AutosaveData(project = original, viewport = ViewportState(), prefs = EditorPrefs(), savedAtMillis = 0)
         val json = ProjectStore.encode(data).toString()
-        assertTrue(json.contains("\"version\":3"))
+        assertTrue(json.contains("\"version\":4"))
     }
 
     @Test

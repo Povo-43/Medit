@@ -660,6 +660,8 @@ private val aapPluginInstances = HashMap<Int, AapPluginInstance>()
     suspend fun presetsFor(soundId: String): List<SoundFontPreset> =
         withContext(Dispatchers.IO) { library.presets(soundId) }
 
+    fun presetsSync(soundId: String): List<SoundFontPreset> = library.presets(soundId)
+
     fun instrumentName(soundId: String): String =
         _instruments.value.firstOrNull { it.id == soundId }?.name ?: "Medit Piano"
 
@@ -862,6 +864,10 @@ private val aapPluginInstances = HashMap<Int, AapPluginInstance>()
     }
     fun setInputDuration(duration: GridUnit) {
         _prefs.value = _prefs.value.copy(inputDuration = duration)
+        scheduleAutosave()
+    }
+    fun setSoundFont(soundId: String) {
+        _prefs.value = _prefs.value.copy(soundId = soundId)
         scheduleAutosave()
     }
     fun setSnapEnabled(on: Boolean) {
